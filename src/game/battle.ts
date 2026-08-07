@@ -10,7 +10,7 @@ import { BotController } from '../ai/bot';
 import { NavGrid } from '../ai/navgrid';
 import { PERSONAS, BOT_NAMES, rosterFor } from '../ai/personas';
 import { TeamBoard } from '../ai/teamboard';
-import { clamp, DEG, shuffled } from '../core/mathx';
+import { angleDelta, ballisticPitch, clamp, damp, DEG, predictIntercept, shuffled } from '../core/mathx';
 import type { InputState } from '../core/input';
 import { MineSystem, PickupSystem } from '../entities/pickup';
 import { ProjectileSystem } from '../entities/projectile';
@@ -34,6 +34,9 @@ export interface PlayerLoadout {
 }
 
 const RESPAWN_TIME = 3;
+
+/** Half-width, in metres, of the corridor auto-aim will lock a target inside. */
+const LOCK_WIDTH = 5.5;
 
 /** Everything the HUD needs, gathered once per frame. */
 export interface BattleSnapshot {
@@ -475,17 +478,23 @@ export class Battle implements Arena {
     const p = this.player;
     if (!p.alive) {
       this.selfDestructTimer = null;
+      this.lockedTarget = null;
       return;
     }
 
-    p.desiredYaw += input.yawDelta;
-    p.desiredPitch = clamp(p.desiredPitch + input.pitchDelta, -25 * DEG, 45 * DEG);
-    this.applyAimAssist(dt);
-    if (input.zoom) this.camera.zoom(input.zoom);
+    // Z/X slew the turret at the speed it can physically manage, so the barrel
+    // tracks the key rather than chasing a runaway target angle.
+    const slew = p.turretDef.rotationSpeed * DEG * p.weapon.rotationMultiplier * p.status.turretScale;
+    p.desiredYaw += input.turretTurn * slew * dt;
+    if (input.centreTurret) p.desiredYaw = p.vehicle.yaw;
+    this.updateAutoAim(dt);
+    if (input.zoom) this.camera.zoom(input.zoom * dt * 9);
 
     p.weapon.intent.fire = input.fire;
-    p.weapon.intent.alt = input.altFire;
-    p.weapon.intent.scope = input.scope;
+    p.weapon.intent.alt = false;
+    // Holding the trigger on a scoped turret is what scopes it in; releasing
+    // both un-scopes and fires the charged shot.
+    p.weapon.intent.scope = input.fire && p.turretDef.scoped != null;
 
     if (input.supply != null) {
       const kind = SUPPLY_ORDER[input.supply - 1];
@@ -518,39 +527,91 @@ export class Battle implements Arena {
 
   keyHeldSelfDestruct = false;
 
+  /** Enemy the player's turret has locked, or null. Drawn by the HUD. */
+  lockedTarget: Tank | null = null;
+
   /**
-   * Slight turret magnetism toward the nearest target in a small screen-space
-   * cone. Strong enough to reward roughly-correct aim, too weak to aim for you.
+   * The player only aims left and right. Once the barrel is lined up on an
+   * enemy horizontally, this picks the elevation that actually connects —
+   * a straight line for flat-shooting guns, a solved arc for Magnum — and
+   * hands the HUD the target so the lock is visible rather than mysterious.
+   *
+   * A turret can only lock what it can physically point at: the solved angle
+   * has to fall inside the turret's elevation envelope, so a Railgun cannot
+   * lock the tank on the roof above it and a Magnum can lob over the wall.
    */
-  private applyAimAssist(dt: number): void {
-    const strength = this.profile.player.aimAssistStrength;
-    if (strength <= 0) return;
+  private updateAutoAim(dt: number): void {
     const p = this.player;
+    const def = p.turretDef;
+    const [minPitch, maxPitch] = p.pitchLimits;
     const from = p.muzzle(new CANNON.Vec3());
-    const dir = p.aimDirection(new CANNON.Vec3());
-    const cone = Math.cos(5 * DEG);
+    const maxRange = def.hardCap ?? Math.max(120, def.rangeMinDamage * 1.3);
 
     let best: Tank | null = null;
-    let bestDot = cone;
+    let bestScore = Infinity;
+    let bestYaw = 0;
+    let bestPitch = 0;
+
     for (const t of this.tanks) {
       if (!t.alive || !this.areEnemies(p, t)) continue;
-      const delta = t.centre().vsub(from);
-      const dist = delta.length();
-      if (dist > 160 || dist < 1) continue;
-      const dot = delta.scale(1 / dist).dot(dir);
-      if (dot <= bestDot) continue;
-      if (!this.phys.lineOfSight(from, t.centre(), p.vehicle.body)) continue;
-      bestDot = dot;
-      best = t;
-    }
-    if (!best) return;
 
-    const delta = best.centre().vsub(from);
-    const targetYaw = Math.atan2(delta.x, delta.z);
-    const targetPitch = Math.atan2(delta.y, Math.hypot(delta.x, delta.z));
-    const k = clamp(strength * dt * 4, 0, 0.5);
-    p.desiredYaw += shortestAngle(p.desiredYaw, targetYaw) * k;
-    p.desiredPitch += (targetPitch - p.desiredPitch) * k;
+      // Lead the shot so the elevation is right for where the target will be,
+      // not where it was — it matters most for slow shells at long range.
+      let aim = t.centre();
+      if (def.projectileSpeed) {
+        const q = predictIntercept(from, aim, t.velocity, def.projectileSpeed);
+        aim = new CANNON.Vec3(q.x, q.y, q.z);
+      }
+
+      const delta = aim.vsub(from);
+      const horizontal = Math.hypot(delta.x, delta.z);
+      const dist = delta.length();
+      if (dist > maxRange || dist < 0.5) continue;
+
+      // The lock cone is a fixed miss distance rather than a fixed angle, so
+      // "lined up" means the same thing whether the target is near or far.
+      const yaw = Math.atan2(delta.x, delta.z);
+      const yawError = Math.abs(angleDelta(p.turretYaw, yaw));
+      const cone = clamp(Math.atan2(LOCK_WIDTH, Math.max(8, horizontal)), 2.5 * DEG, 16 * DEG);
+      if (yawError > cone) continue;
+
+      let pitch = Math.atan2(delta.y, horizontal);
+      if (def.gravity && def.projectileSpeed) {
+        const solved = ballisticPitch(horizontal, delta.y, def.projectileSpeed, def.gravity);
+        if (solved == null) continue;
+        pitch = solved;
+      }
+      if (pitch < minPitch || pitch > maxPitch) continue;
+      if (!this.phys.lineOfSight(from, t.centre(), p.vehicle.body)) continue;
+
+      // Centred beats close: whichever target the barrel is nearest to pointing
+      // at wins, with distance only breaking ties.
+      const score = yawError * 60 + dist * 0.01;
+      if (score < bestScore) {
+        bestScore = score;
+        best = t;
+        bestYaw = yaw;
+        bestPitch = pitch;
+      }
+    }
+
+    this.lockedTarget = best;
+    if (!best) {
+      // Nothing to elevate for — settle back to level so the next lock is a
+      // short trip rather than a swing from wherever the last one left it.
+      p.desiredPitch += (0 - p.desiredPitch) * damp(4, dt);
+      return;
+    }
+
+    p.desiredPitch = clamp(bestPitch, minPitch, maxPitch);
+
+    // Horizontal magnetism, unchanged in spirit from the mouse build: enough to
+    // forgive a key press a fraction late, never enough to aim for you.
+    const strength = this.profile.player.aimAssistStrength;
+    if (strength > 0) {
+      const k = clamp(strength * dt * 4, 0, 0.4);
+      p.desiredYaw += angleDelta(p.desiredYaw, bestYaw) * k;
+    }
   }
 
   // ---- presentation -----------------------------------------------------
@@ -643,9 +704,3 @@ export class Battle implements Arena {
   }
 }
 
-function shortestAngle(from: number, to: number): number {
-  let d = (to - from) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}

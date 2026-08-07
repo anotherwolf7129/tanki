@@ -119,6 +119,14 @@ export interface TurretDef {
   rangeMinDamage: number;
   hardCap?: number;
 
+  /**
+   * Elevation envelope, in degrees. Auto-aim will only lock a target the barrel
+   * can actually be pointed at, so a rigid gun like the Railgun cannot snipe
+   * something directly above it while a Magnum mortar happily lobs over a wall.
+   */
+  pitchUpDeg?: number;
+  pitchDownDeg?: number;
+
   projectileSpeed?: number;
   gravity?: number;
   barrels?: number;

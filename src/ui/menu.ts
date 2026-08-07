@@ -202,16 +202,17 @@ export class Menu {
 
         <div class="controls-row">
           <div class="keys">
-            <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive</span>
-            <span><kbd>Mouse</kbd> aim</span>
-            <span><kbd>LMB</kbd> fire</span>
-            <span><kbd>RMB</kbd> alt fire</span>
-            <span><kbd>Shift</kbd> scope</span>
-            <span><kbd>Space</kbd> overdrive</span>
+            <span><kbd>↑</kbd><kbd>↓</kbd> drive</span>
+            <span><kbd>←</kbd><kbd>→</kbd> steer</span>
+            <span><kbd>Z</kbd><kbd>X</kbd> turret</span>
+            <span><kbd>Space</kbd> fire · hold &amp; release to charge</span>
+            <span><kbd>C</kbd> centre turret</span>
+            <span><kbd>Q</kbd> overdrive</span>
             <span><kbd>1</kbd>–<kbd>5</kbd> supplies</span>
             <span><kbd>R</kbd> flip</span>
             <span><kbd>Tab</kbd> scores</span>
             <span><kbd>V</kbd> view</span>
+            <span><kbd>−</kbd><kbd>=</kbd> zoom</span>
             <span><kbd>Esc</kbd> menu</span>
           </div>
           <button id="start" class="primary">Enter battle</button>

@@ -2,6 +2,7 @@ import * as CANNON from 'cannon-es';
 import * as THREE from 'three';
 import type { HullDef, SupplyKind, TeamId, TurretDef } from '../data/schema';
 import { CROSS_COOLDOWN, SELF_COOLDOWN, SUPPLIES, SUPPLY_ORDER, crossCooldownApplies } from '../data/supplies';
+import { pitchLimits } from '../data';
 import { angleDelta, clamp, DEG } from '../core/mathx';
 import { VehicleController } from '../physics/vehicle';
 import type { PhysicsWorld } from '../physics/world';
@@ -172,6 +173,11 @@ export class Tank {
     return origin;
   }
 
+  /** How far this turret's barrel can be elevated and depressed, in radians. */
+  get pitchLimits(): [number, number] {
+    return pitchLimits(this.turretDef);
+  }
+
   /** Effective turret rotation speed after status, scoping and firing modifiers. */
   private turretRotationSpeed(): number {
     let speed = this.turretDef.rotationSpeed * this.status.turretScale;
@@ -197,8 +203,9 @@ export class Tank {
     }
 
     const pitchRate = Math.max(0.6, maxSpeed) * 1.2;
+    const [minPitch, maxPitch] = this.pitchLimits;
     const pd = clamp(this.desiredPitch - this.turretPitch, -pitchRate * dt, pitchRate * dt);
-    this.turretPitch = clamp(this.turretPitch + pd, -25 * DEG, 45 * DEG);
+    this.turretPitch = clamp(this.turretPitch + pd, minPitch, maxPitch);
   }
 
   update(dt: number, arena: Arena): void {

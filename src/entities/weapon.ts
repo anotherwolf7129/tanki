@@ -129,6 +129,10 @@ export class Weapon {
   get isCharging(): boolean {
     return this.charging;
   }
+  /** True when letting go of the trigger is what fires this turret. */
+  get releaseFires(): boolean {
+    return this.def.fireMode === 'sniper' || this.def.fireMode === 'dual';
+  }
   get lockFraction(): number {
     return this.def.guided ? clamp(this.lockProgress / this.def.guided.lockTime, 0, 1) : 0;
   }
@@ -333,10 +337,25 @@ export class Weapon {
   private tickSniper(dt: number, arena: Arena, intent: FireIntent): void {
     const s = this.def.scoped!;
     this.scopedActive = intent.scope;
+
+    // Release always resolves the shot, even on the frame the scope drops —
+    // the player's hold on the trigger is what scopes in, so letting go ends
+    // both at once and the charge must not be swallowed by that.
+    if (this.charging && !intent.fire) {
+      const k = this.charge / s.chargeTime;
+      const dmg = s.minDamage + (s.maxDamage - s.minDamage) * k;
+      this.fireHitscan(arena, dmg, s.recoil, this.def.impactForce * (1 + k));
+      this.cooldown = s.reloadTime;
+      this.charge = 0;
+      this.charging = false;
+      return;
+    }
+
     if (!this.scopedActive) {
       this.charge = 0;
       this.charging = false;
-      // Arcade mode: a tap for a quick, capped shot.
+      // Arcade mode: a tap for a quick, capped shot. Bots use this at knife
+      // range, where standing still to charge would be suicide.
       if (intent.fire && this.ready) {
         this.fireHitscan(arena, this.def.damage, this.def.recoil, this.def.impactForce);
         this.cooldown = this.def.reloadTime;
@@ -353,13 +372,6 @@ export class Weapon {
     if (intent.fire) {
       this.charging = true;
       this.charge = Math.min(s.chargeTime, this.charge + dt);
-    } else if (this.charging) {
-      const k = this.charge / s.chargeTime;
-      const dmg = s.minDamage + (s.maxDamage - s.minDamage) * k;
-      this.fireHitscan(arena, dmg, s.recoil, this.def.impactForce * (1 + k));
-      this.cooldown = s.reloadTime;
-      this.charge = 0;
-      this.charging = false;
     }
   }
 
@@ -412,19 +424,42 @@ export class Weapon {
     }
   }
 
-  private tickDual(_dt: number, arena: Arena, intent: FireIntent): void {
+  /**
+   * Tap for the light shot, hold to the top of the charge and release for the
+   * super shot. Bots skip the charge and request `alt` directly.
+   */
+  private tickDual(dt: number, arena: Arena, intent: FireIntent): void {
     const alt = this.def.alt!;
-    if (this.cooldown > 0) return;
+    const chargeTime = this.def.charge?.time ?? 0.9;
+
     if (intent.alt) {
-      this.fireShell(arena, alt.damage, alt.weakDamage, {
-        speed: alt.projectileSpeed,
-        impactForce: alt.impactForce,
-        recoil: alt.recoil,
-        splash: alt.splash,
-        radius: 0.45,
-      });
-      this.cooldown = alt.reloadTime;
-    } else if (intent.fire) {
+      this.charge = 0;
+      this.charging = false;
+      if (this.cooldown <= 0) this.fireAlt(arena, alt);
+      return;
+    }
+
+    if (intent.fire) {
+      // Winding up during the reload would let the player bank a super shot for
+      // free, so the charge only starts once the gun is actually loaded.
+      if (this.cooldown > 0) {
+        this.charge = 0;
+        this.charging = false;
+        return;
+      }
+      this.charging = true;
+      this.charge = Math.min(chargeTime, this.charge + dt);
+      return;
+    }
+
+    if (!this.charging) return;
+    const full = this.charge >= chargeTime;
+    this.charging = false;
+    this.charge = 0;
+    if (this.cooldown > 0) return;
+    if (full) {
+      this.fireAlt(arena, alt);
+    } else {
       this.fireShell(arena, this.def.damage, this.def.weakDamage, {
         speed: this.def.projectileSpeed ?? 420,
         impactForce: this.def.impactForce,
@@ -432,6 +467,17 @@ export class Weapon {
       });
       this.cooldown = this.currentReloadTime();
     }
+  }
+
+  private fireAlt(arena: Arena, alt: NonNullable<TurretDef['alt']>): void {
+    this.fireShell(arena, alt.damage, alt.weakDamage, {
+      speed: alt.projectileSpeed,
+      impactForce: alt.impactForce,
+      recoil: alt.recoil,
+      splash: alt.splash,
+      radius: 0.45,
+    });
+    this.cooldown = alt.reloadTime;
   }
 
   private tickCone(dt: number, arena: Arena, intent: FireIntent): void {

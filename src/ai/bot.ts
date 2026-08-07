@@ -217,8 +217,9 @@ export class BotController {
     yaw += this.jitterYaw;
     pitch += this.jitterPitch;
 
+    const [minPitch, maxPitch] = this.self.pitchLimits;
     this.self.desiredYaw = yaw;
-    this.self.desiredPitch = clamp(pitch, -25 * DEG, 45 * DEG);
+    this.self.desiredPitch = clamp(pitch, minPitch, maxPitch);
   }
 
   // ---- trigger discipline ----------------------------------------------

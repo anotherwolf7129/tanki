@@ -31,7 +31,7 @@ const menu = new Menu(app);
 let battle: Battle | null = null;
 let paused = true;
 
-const input = new Input(glCanvas, {
+const input = new Input({
   onEscape: () => {
     if (!battle) return;
     if (menu.visible) {
@@ -48,7 +48,6 @@ function startBattle(result: MenuResult): void {
   menu.hide();
   paused = false;
   input.setEnabled(true);
-  input.requestLock();
   hudCanvas.classList.remove('dim');
 }
 
@@ -64,7 +63,6 @@ function resume(): void {
   menu.hide();
   paused = false;
   input.setEnabled(true);
-  input.requestLock();
   hudCanvas.classList.remove('dim');
 }
 
@@ -102,9 +100,7 @@ function frame(now: number): void {
 
   if (battle) {
     if (!paused) {
-      const state = input.sample();
-      battle.update(dt, state);
-      input.endFrame();
+      battle.update(dt, input.sample());
     }
     renderer.render(battle.scene, battle.camera.camera);
     hud.draw(battle, battle.snapshot());

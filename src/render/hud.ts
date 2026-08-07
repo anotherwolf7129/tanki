@@ -39,6 +39,7 @@ export class Hud {
     ctx.textBaseline = 'middle';
 
     this.drawDamageNumbers(battle, w, h);
+    this.drawLockOn(battle, snap, w, h);
     this.drawReticle(battle, snap, w, h);
     this.drawTopBar(snap, w);
     this.drawHealth(snap, w, h);
@@ -55,13 +56,74 @@ export class Hud {
 
   // ---- pieces -----------------------------------------------------------
 
+  /**
+   * Brackets the enemy auto-aim has locked. Without this the player has no way
+   * to tell that lining up horizontally worked — the barrel elevates on its own
+   * and the tell would otherwise be a shot that happens to land.
+   */
+  private drawLockOn(battle: Battle, snap: BattleSnapshot, w: number, h: number): void {
+    const target = battle.lockedTarget;
+    if (!target || !snap.player.alive) return;
+    const centre = target.centre();
+    const p = this.project(battle, centre.x, centre.y, centre.z, w, h);
+    if (!p) return;
+
+    const cam = battle.camera.camera;
+    const dist = Math.max(1, cam.position.distanceTo(this.tmp.set(centre.x, centre.y, centre.z)));
+    const radius = Math.max(target.hull.size[0], target.hull.size[2]) * 0.62;
+    const r = clamp((radius / dist) * (h / (2 * Math.tan((cam.fov * Math.PI) / 180 / 2))), 16, 220);
+
+    const ready = snap.player.weapon.ready;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.strokeStyle = ready ? '#f87171' : 'rgba(248,113,113,0.55)';
+    ctx.lineWidth = 2;
+    const arm = r * 0.42;
+    for (const [sx, sy] of [
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+    ]) {
+      const x = p.x + sx * r;
+      const y = p.y + sy * r;
+      ctx.beginPath();
+      ctx.moveTo(x - sx * arm, y);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x, y - sy * arm);
+      ctx.stroke();
+    }
+
+    // Health above the brackets, so the decision to keep shooting is on screen
+    // next to the thing being shot.
+    const barW = r * 1.6;
+    const barY = p.y - r - 12;
+    ctx.fillStyle = 'rgba(8,10,14,0.7)';
+    roundRect(ctx, p.x - barW / 2, barY, barW, 5, 2);
+    ctx.fill();
+    ctx.fillStyle = target.healthFraction > 0.5 ? ACCENT : target.healthFraction > 0.25 ? '#fbbf24' : '#f87171';
+    roundRect(ctx, p.x - barW / 2, barY, Math.max(2, barW * target.healthFraction), 5, 2);
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.fillStyle = '#e6edf5';
+    ctx.fillText(target.name, p.x, barY - 10);
+    ctx.restore();
+  }
+
   private drawReticle(battle: Battle, snap: BattleSnapshot, w: number, h: number): void {
     const ctx = this.ctx;
     if (!snap.player.alive) return;
-    const cx = w / 2;
-    const cy = h / 2;
     const weapon = snap.player.weapon;
     const scoped = weapon.scopeFov != null;
+
+    // The barrel elevates itself, so screen centre is no longer where the shot
+    // goes — anchor the reticle to the resolved aim point instead.
+    const aim = battle.aimPoint();
+    const projected = scoped ? null : this.project(battle, aim.x, aim.y, aim.z, w, h);
+    const cx = projected?.x ?? w / 2;
+    const cy = projected?.y ?? h / 2;
 
     ctx.save();
     ctx.strokeStyle = weapon.ready || scoped ? ACCENT : 'rgba(255,255,255,0.4)';
@@ -81,7 +143,7 @@ export class Hud {
       ctx.stroke();
       // Charge ring: the longer you hold, the harder it hits.
       if (weapon.chargeFraction > 0) {
-        ctx.strokeStyle = '#fbbf24';
+        ctx.strokeStyle = weapon.chargeFraction >= 1 ? ACCENT : '#fbbf24';
         ctx.lineWidth = 4;
         ctx.beginPath();
         ctx.arc(cx, cy, 100, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * weapon.chargeFraction);
@@ -104,11 +166,18 @@ export class Hud {
       ctx.fillRect(cx - 1, cy - 1, 2, 2);
 
       if (weapon.chargeFraction > 0 && weapon.isCharging) {
-        ctx.strokeStyle = '#fbbf24';
+        const full = weapon.chargeFraction >= 1;
+        ctx.strokeStyle = full ? ACCENT : '#fbbf24';
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(cx, cy, spread + 16, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * weapon.chargeFraction);
         ctx.stroke();
+        if (full && weapon.releaseFires) {
+          ctx.fillStyle = ACCENT;
+          ctx.font = '700 11px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('RELEASE', cx, cy + spread + 34);
+        }
       }
       if (weapon.lockFraction > 0) {
         ctx.strokeStyle = weapon.lockFraction >= 1 ? '#f87171' : '#fbbf24';
@@ -211,7 +280,7 @@ export class Hud {
     ctx.fillStyle = od >= 1 ? '#fbbf24' : '#9aa4b2';
     ctx.font = '600 10px system-ui, sans-serif';
     ctx.fillText(
-      od >= 1 ? `${p.hull.overdrive.displayName.toUpperCase()} READY — SPACE` : p.hull.overdrive.displayName,
+      od >= 1 ? `${p.hull.overdrive.displayName.toUpperCase()} READY — Q` : p.hull.overdrive.displayName,
       x,
       y + 44,
     );
