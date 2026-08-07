@@ -13,20 +13,48 @@ npm run dev          # http://localhost:5173
 
 ## Controls
 
+The game is keyboard-only. There is no mouse input and no pointer capture.
+
 | Input | Action |
 |---|---|
-| `W` `A` `S` `D` | Drive |
-| Mouse | Aim (click the canvas to capture the pointer) |
-| Left mouse | Fire |
-| Right mouse | Alternate fire (Gauss super shot) |
-| `Shift` | Scope (Shaft) |
-| `Space` | Overdrive |
+| `↑` `↓` (or `W` `S`) | Drive forward / reverse |
+| `←` `→` (or `A` `D`) | Steer the hull |
+| `Z` `X` | Slew the turret left / right |
+| `C` | Snap the turret back to the hull's heading |
+| `Space` | Fire. Hold and release on Shaft and Gauss (see below) |
+| `Q` | Overdrive |
 | `1`–`5` | Repair Kit / Double Armor / Double Damage / Speed Boost / Mine |
 | `R` | Flip an overturned hull |
 | `V` | Toggle first person |
+| `−` `=` | Camera boom in / out |
 | `K` (hold 5 s) | Self destruct |
 | `Tab` | Scoreboard |
 | `Esc` | Garage / battle setup |
+
+### Aiming
+
+You only aim left and right. Elevation is resolved for you: once the barrel is lined up on an enemy
+horizontally, auto-aim solves the angle that actually connects — a straight line for flat-shooting
+guns, a real ballistic arc for Magnum — and the target is bracketed on screen with its name and
+health so the lock is visible rather than something you infer from where your shell landed.
+
+A turret can only lock what it can physically point at. Every turret declares an elevation envelope
+(`pitchUpDeg` / `pitchDownDeg` in `turrets.json`), so a rigid Railgun (16°/10°) cannot lock the tank
+on the roof directly above it, while a Magnum mortar (65°/8°) happily lobs over the wall in between.
+The lock cone is a fixed miss distance rather than a fixed angle, so "lined up" means the same thing
+at 10 m and at 150 m.
+
+### Charged shots
+
+`Space` fires everything. Turrets with a charge behave as hold-and-release:
+
+- **Shaft** — holding the trigger scopes in and winds the charge up to 3 s; releasing un-scopes and
+  fires, scaling from 220 to 700 damage with how long you held.
+- **Gauss** — tap for the 130-damage light shot, or hold to the top of the 0.9 s charge and release
+  for the 420-damage super shot with splash. The reticle ring turns green and reads `RELEASE` when
+  the heavy shot is armed.
+- **Railgun** — holds and auto-fires at the top of its charge, as before; the charge is committed
+  once started.
 
 ## What's implemented
 

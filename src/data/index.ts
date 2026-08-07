@@ -1,5 +1,6 @@
 import turretsJson from './turrets.json';
 import hullsJson from './hulls.json';
+import { DEG } from '../core/mathx';
 import type { HullDef, TurretDef } from './schema';
 
 function withIds<T extends object>(raw: Record<string, unknown>): Record<string, T> {
@@ -24,6 +25,20 @@ export function hull(id: string): HullDef {
   const h = HULLS[id];
   if (!h) throw new Error(`unknown hull: ${id}`);
   return h;
+}
+
+const DEFAULT_PITCH_UP = 30;
+const DEFAULT_PITCH_DOWN = 18;
+
+/**
+ * Elevation envelope for a turret as `[min, max]` radians. This is the single
+ * source of truth for how far a barrel can be tilted — auto-aim, the bots and
+ * the turret controller all clamp against it.
+ */
+export function pitchLimits(t: TurretDef): [number, number] {
+  const up = (t.pitchUpDeg ?? DEFAULT_PITCH_UP) * DEG;
+  const down = (t.pitchDownDeg ?? DEFAULT_PITCH_DOWN) * DEG;
+  return [-down, up];
 }
 
 /**
