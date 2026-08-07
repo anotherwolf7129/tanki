@@ -1,0 +1,651 @@
+import * as CANNON from 'cannon-es';
+import * as THREE from 'three';
+import { hull as hullDef, turret as turretDef } from '../data';
+import { DIFFICULTIES, DynamicDifficulty, LAST_HIT_COOLDOWN, LAST_HIT_FLOOR, type DifficultyProfile } from '../data/difficulty';
+import { map as mapDef } from '../data/maps';
+import type { BattleSettings } from '../data/modes';
+import type { MapDef, TeamId, TurretDef } from '../data/schema';
+import { SELF_DESTRUCT_TIME, SUPPLY_ORDER } from '../data/supplies';
+import { BotController } from '../ai/bot';
+import { NavGrid } from '../ai/navgrid';
+import { PERSONAS, BOT_NAMES, rosterFor } from '../ai/personas';
+import { TeamBoard } from '../ai/teamboard';
+import { clamp, DEG, shuffled } from '../core/mathx';
+import type { InputState } from '../core/input';
+import { MineSystem, PickupSystem } from '../entities/pickup';
+import { ProjectileSystem } from '../entities/projectile';
+import { Tank } from '../entities/tank';
+import { PhysicsWorld, WORLD_MASK } from '../physics/world';
+import { ChaseCamera } from '../render/camera';
+import { Effects } from '../render/effects';
+import { createScene, type SceneBundle } from '../render/scene';
+import { CaptureFlagMode } from '../modes/captureflag';
+import { ControlPointsMode } from '../modes/controlpoints';
+import { DeathmatchMode } from '../modes/deathmatch';
+import { TeamDeathmatchMode } from '../modes/teamdeathmatch';
+import type { ModeController } from '../modes/base';
+import { OverdriveSystem } from './overdrive';
+import type { Arena, DamageOptions, Notification, ProjectileSpawn } from './types';
+
+export interface PlayerLoadout {
+  hull: string;
+  turret: string;
+  name: string;
+}
+
+const RESPAWN_TIME = 3;
+
+/** Everything the HUD needs, gathered once per frame. */
+export interface BattleSnapshot {
+  player: Tank;
+  elapsed: number;
+  timeLimit: number;
+  modeCode: string;
+  modeLine: string;
+  notifications: Notification[];
+  scoreboard: Tank[];
+  teamScores: Record<'red' | 'blue', number> | null;
+  selfDestruct: number | null;
+  over: boolean;
+  winner?: string;
+  reason?: string;
+}
+
+export class Battle implements Arena {
+  readonly phys: PhysicsWorld;
+  readonly tanks: Tank[] = [];
+  readonly fx: Effects;
+  readonly camera: ChaseCamera;
+  readonly settings: BattleSettings;
+  readonly def: MapDef;
+  readonly profile: DifficultyProfile;
+
+  private readonly bundle: SceneBundle;
+  private readonly nav: NavGrid;
+  private readonly projectiles: ProjectileSystem;
+  private readonly pickups: PickupSystem;
+  private readonly mines: MineSystem;
+  private readonly overdrives: OverdriveSystem;
+  private readonly mode: ModeController;
+  private readonly boards: Record<'red' | 'blue' | 'free', TeamBoard>;
+  private readonly dynamic: DynamicDifficulty;
+  private readonly bodyIndex = new Map<CANNON.Body, Tank>();
+  private readonly notifications: Notification[] = [];
+
+  readonly player: Tank;
+  time = 0;
+  private elapsed = 0;
+  private finished: { winner?: string; reason?: string } | null = null;
+  private selfDestructTimer: number | null = null;
+  private readonly spawnCursor: Record<TeamId, number> = { red: 0, blue: 0, free: 0 };
+
+  constructor(settings: BattleSettings, loadout: PlayerLoadout, aspect: number) {
+    this.settings = settings;
+    this.def = mapDef(settings.mapId);
+    this.profile = DIFFICULTIES[settings.difficulty] ?? DIFFICULTIES.standard;
+    this.dynamic = new DynamicDifficulty(this.profile);
+
+    this.phys = new PhysicsWorld(this.def.gravityScale);
+    this.phys.buildMap(this.def);
+    this.bundle = createScene(this.def);
+    this.fx = new Effects(this.bundle.scene);
+    this.camera = new ChaseCamera(aspect, this.phys);
+    this.nav = new NavGrid(this.phys, this.def);
+    this.projectiles = new ProjectileSystem(this.bundle.scene);
+    this.mines = new MineSystem(this.bundle.scene);
+    this.overdrives = new OverdriveSystem(this.bundle.scene);
+    this.pickups = new PickupSystem(
+      this.bundle.scene,
+      this.def,
+      settings.suppliesEnabled,
+      settings.goldBoxEnabled,
+      settings.mode === 'DM',
+    );
+
+    this.boards = {
+      red: new TeamBoard('red'),
+      blue: new TeamBoard('blue'),
+      free: new TeamBoard('free'),
+    };
+
+    this.mode = this.createMode();
+
+    const teamed = this.mode.teams;
+    const playerTeam: TeamId = teamed ? 'blue' : 'free';
+    this.player = this.spawnTank({
+      name: loadout.name || 'You',
+      team: playerTeam,
+      isPlayer: true,
+      hullId: loadout.hull,
+      turretId: loadout.turret,
+    });
+
+    this.spawnBots(teamed, playerTeam);
+    // Everyone starts with one of each supply so the first minute has options.
+    for (const kind of SUPPLY_ORDER) {
+      this.player.giveSupply(kind, 3);
+      for (const bot of this.tanks) if (!bot.isPlayer && Math.random() < 0.5) bot.giveSupply(kind, 1);
+    }
+  }
+
+  get scene(): THREE.Scene {
+    return this.bundle.scene;
+  }
+
+  get playerCount(): number {
+    return this.tanks.length;
+  }
+
+  private createMode(): ModeController {
+    switch (this.settings.mode) {
+      case 'TDM':
+        return new TeamDeathmatchMode(this.def, this.bundle.scene);
+      case 'CTF':
+        return new CaptureFlagMode(this.def, this.bundle.scene);
+      case 'CP':
+        return new ControlPointsMode(this.def, this.bundle.scene);
+      default:
+        return new DeathmatchMode(this.def, this.bundle.scene);
+    }
+  }
+
+  // ---- spawning ---------------------------------------------------------
+
+  private spawnBots(teamed: boolean, playerTeam: TeamId): void {
+    const count = this.settings.botCount;
+    const personas = shuffled(rosterFor(count));
+    const names = shuffled(BOT_NAMES);
+
+    for (let i = 0; i < count; i++) {
+      const persona = PERSONAS[personas[i]];
+      const team: TeamId = teamed ? (i % 2 === 0 ? 'red' : playerTeam === 'blue' ? 'blue' : 'red') : 'free';
+      const bot = this.spawnTank({
+        name: names[i % names.length],
+        team,
+        isPlayer: false,
+        hullId: persona.hull,
+        turretId: persona.turret,
+      });
+      bot.ai = new BotController(bot, persona, {
+        arena: this,
+        nav: this.nav,
+        board: this.boards[team],
+        profile: this.profile,
+        slack: () => this.dynamic.slack,
+        nearestPickup: (from) => this.pickups.nearest(from),
+        objective: (self) => this.mode.objectiveFor(self, this),
+      });
+    }
+  }
+
+  private spawnTank(spec: {
+    name: string;
+    team: TeamId;
+    isPlayer: boolean;
+    hullId: string;
+    turretId: string;
+  }): Tank {
+    const h = hullDef(spec.hullId);
+    const t = turretDef(h.fixedTurret ?? spec.turretId);
+    const p = spec.isPlayer ? this.profile.player : this.profile.bot;
+    const spawn = this.pickSpawn(spec.team);
+
+    const tank = new Tank(
+      {
+        id: this.tanks.length,
+        name: spec.name,
+        team: spec.team,
+        isPlayer: spec.isPlayer,
+        hull: h,
+        turret: t,
+        hullMultiplier: p.hullTierMultiplier,
+        turretMultiplier: p.turretTierMultiplier,
+        spawnProtection: p.spawnProtection,
+        overdriveChargeRate: p.overdriveChargeRate,
+      },
+      this.phys,
+      this.bundle.scene,
+      spawn,
+    );
+    this.tanks.push(tank);
+    this.bodyIndex.set(tank.vehicle.body, tank);
+    return tank;
+  }
+
+  /** Round-robin through the team's spawn list, avoiding occupied points. */
+  private pickSpawn(team: TeamId): { pos: CANNON.Vec3; yaw: number } {
+    const list = this.def.spawns[team]?.length ? this.def.spawns[team] : this.def.spawns.free;
+    let best = list[0];
+    let bestScore = -Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const s = list[(this.spawnCursor[team] + i) % list.length];
+      const p = new CANNON.Vec3(s.pos[0], s.pos[1], s.pos[2]);
+      let score = Math.random() * 4;
+      for (const t of this.tanks) {
+        if (!t.alive) continue;
+        const d = t.position.distanceTo(p);
+        // Never drop a player on top of an enemy; allies matter much less.
+        score += this.areEnemiesTeam(team, t.team) ? Math.min(d, 90) : Math.min(d, 20) * 0.15;
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        best = s;
+      }
+    }
+    this.spawnCursor[team] = (this.spawnCursor[team] + 1) % list.length;
+    const surface = this.nav.surfaceHeight(best.pos[0], best.pos[2]);
+    return {
+      pos: new CANNON.Vec3(best.pos[0], Math.max(best.pos[1], surface) + 2.2, best.pos[2]),
+      yaw: best.yaw * DEG,
+    };
+  }
+
+  // ---- Arena implementation --------------------------------------------
+
+  tankForBody(body: CANNON.Body): Tank | null {
+    return this.bodyIndex.get(body) ?? null;
+  }
+
+  teamOf(tank: Tank): TeamId {
+    return tank.team;
+  }
+
+  private areEnemiesTeam(a: TeamId, b: TeamId): boolean {
+    if (a === 'free' || b === 'free') return true;
+    return a !== b;
+  }
+
+  areEnemies(a: Tank, b: Tank): boolean {
+    if (a === b) return false;
+    return this.areEnemiesTeam(a.team, b.team);
+  }
+
+  areAllies(a: Tank, b: Tank): boolean {
+    if (a === b) return true;
+    if (a.team === 'free' || b.team === 'free') return false;
+    return a.team === b.team;
+  }
+
+  /**
+   * The single damage funnel. Every player-advantage rule that touches numbers
+   * lives here so the asymmetry is auditable in one place.
+   */
+  damage(target: Tank, amount: number, source: Tank | null, opts: DamageOptions = {}): number {
+    if (!target.alive || amount <= 0 || this.finished) return 0;
+    const kind = opts.kind ?? 'direct';
+    const selfInflicted = source === target;
+
+    if (target.spawnProtection > 0 && !selfInflicted) return 0;
+    if (source && !selfInflicted && this.areAllies(source, target) && !this.settings.friendlyFire) return 0;
+
+    let dmg = amount;
+    if (!opts.ignoreArmor) dmg *= target.status.damageTakenScale;
+    dmg *= 1 - target.damageReduction;
+    if (source?.isPlayer && !selfInflicted) dmg *= this.profile.player.damageDealtMultiplier;
+    if (target.isPlayer) dmg *= this.profile.player.damageTakenMultiplier;
+
+    // Rounding in the player's favour, both directions.
+    if (source?.isPlayer && !target.isPlayer) dmg = Math.ceil(dmg);
+    else if (target.isPlayer) dmg = Math.floor(dmg);
+
+    if (dmg <= 0) return 0;
+
+    // Last-hit protection: never surfaced in the UI, on a long cooldown.
+    if (
+      target.isPlayer &&
+      this.profile.player.lastHitProtection &&
+      target.health - dmg <= 0 &&
+      target.healthFraction > LAST_HIT_FLOOR * 1.5 &&
+      this.time - target.lastHitProtectionAt > LAST_HIT_COOLDOWN
+    ) {
+      target.lastHitProtectionAt = this.time;
+      dmg = target.health - target.maxHealth * LAST_HIT_FLOOR;
+    }
+
+    target.health -= dmg;
+    target.interruptHeal();
+    if (source && !selfInflicted) {
+      target.lastAttacker = source;
+      target.lastAttackedAt = this.time;
+      source.damageDealt += dmg;
+    }
+
+    const at = opts.at ?? target.centre();
+    if (source?.isPlayer && !selfInflicted) {
+      this.fx.damageNumber(at, dmg, opts.critical ? '#fbbf24' : '#ffffff');
+    } else if (target.isPlayer) {
+      this.fx.shake = Math.min(1.4, this.fx.shake + clamp(dmg / target.maxHealth, 0, 0.5) * 2.2);
+    }
+    if (kind !== 'burn') this.fx.impact(at, new CANNON.Vec3(0, 1, 0), opts.critical ? 0xfbbf24 : 0xff5555, 0.6);
+
+    if (target.health <= 0) this.destroy(target, source);
+    return dmg;
+  }
+
+  heal(target: Tank, amount: number, _source: Tank | null): number {
+    if (!target.alive || amount <= 0) return 0;
+    const before = target.health;
+    target.health = Math.min(target.maxHealth, target.health + amount);
+    return target.health - before;
+  }
+
+  splash(
+    centre: CANNON.Vec3,
+    radius: number,
+    damageMax: number,
+    damageMin: number,
+    source: Tank | null,
+    opts: { selfDamage: boolean; impactForce: number; turret?: TurretDef },
+  ): void {
+    for (const tank of this.tanks) {
+      if (!tank.alive) continue;
+      if (tank === source && !opts.selfDamage) continue;
+      const to = tank.centre();
+      const dist = to.distanceTo(centre);
+      if (dist > radius) continue;
+      // Falls off linearly from centre damage to the edge value.
+      const k = clamp(dist / radius, 0, 1);
+      const dmg = damageMax + (damageMin - damageMax) * k;
+      // Walls block blast, open ground does not. The probe starts a little way
+      // off the impact point: a shell that lands on the floor detonates exactly
+      // on a collider surface, and a ray from there hits that surface at
+      // distance zero and reports the whole blast as occluded.
+      if (dist > 1.5) {
+        const probe = to.vsub(centre);
+        probe.normalize();
+        probe.scale(0.9, probe);
+        probe.vadd(centre, probe);
+        probe.y += 0.35;
+        if (!this.phys.lineOfSight(probe, to, tank.vehicle.body)) continue;
+      }
+      this.damage(tank, dmg, source, { kind: 'splash', at: to });
+      if (opts.impactForce > 0 && dist > 0.01) {
+        const push = to.vsub(centre);
+        push.scale(1 / dist, push);
+        push.y = Math.max(push.y, 0.35);
+        tank.vehicle.applyImpulse(push, opts.impactForce * (1 - k * 0.6));
+      }
+    }
+  }
+
+  spawnProjectile(spec: ProjectileSpawn): void {
+    this.projectiles.spawn(spec);
+  }
+
+  spawnMine(owner: Tank, position: CANNON.Vec3): void {
+    this.mines.spawn(owner, position);
+  }
+
+  awardBattlePoints(tank: Tank, points: number): void {
+    tank.addBattlePoints(points);
+  }
+
+  notify(text: string, kind: Notification['kind'] = 'info'): void {
+    if (!text) return;
+    this.notifications.push({ text, kind, at: this.time });
+    if (this.notifications.length > 30) this.notifications.shift();
+  }
+
+  // ---- destruction and respawn -----------------------------------------
+
+  private destroy(victim: Tank, source: Tank | null): void {
+    const killer = source && source !== victim ? source : victim.lastAttacker;
+    this.fx.explosion(victim.position, victim.hull.size[0] * 3.2, 0xff8844);
+    this.overdrives.clearFor(victim);
+    this.mode.onDeath(victim, this);
+    victim.ai?.onDeath();
+    victim.kill();
+    victim.respawnTimer = RESPAWN_TIME;
+
+    this.mode.onKill(killer ?? null, victim, this);
+
+    if (killer && killer !== victim) {
+      if (killer.isPlayer) {
+        this.dynamic.recordKill();
+        this.notify(`You destroyed ${victim.name}`, 'kill');
+      } else if (victim.isPlayer) {
+        this.dynamic.recordDeath();
+        this.notify(`${killer.name} destroyed you`, 'kill');
+      } else {
+        this.notify(`${killer.name} destroyed ${victim.name}`, 'kill');
+      }
+    } else if (victim.isPlayer) {
+      this.dynamic.recordDeath();
+      this.notify('You were destroyed', 'kill');
+    }
+  }
+
+  private respawn(tank: Tank): void {
+    tank.respawn(this.pickSpawn(tank.team));
+  }
+
+  // ---- frame ------------------------------------------------------------
+
+  update(dt: number, input: InputState): void {
+    if (this.finished) {
+      this.fx.update(dt);
+      this.camera.update(dt, this.player, this.fx.shake, null);
+      return;
+    }
+
+    this.time += dt;
+    this.elapsed += dt;
+    this.dynamic.update(dt);
+    for (const board of Object.values(this.boards)) board.beginTick();
+
+    this.controlPlayer(dt, input);
+
+    for (const tank of this.tanks) {
+      if (!tank.alive) {
+        tank.respawnTimer -= dt;
+        if (tank.respawnTimer <= 0) this.respawn(tank);
+        continue;
+      }
+      if (tank.ai) {
+        tank.ai.update(dt, this.time);
+        if (tank.ai.pendingOverdrive) {
+          tank.ai.pendingOverdrive = false;
+          this.overdrives.activate(tank, this);
+        }
+      }
+      tank.update(dt, this);
+    }
+
+    this.phys.step(dt);
+    this.projectiles.update(dt, this);
+    this.overdrives.update(dt, this);
+    for (const r of this.overdrives.activeRampages()) this.mines.clearNear(r.pos, r.radius);
+    this.mines.update(dt, this);
+    this.pickups.update(dt, this);
+    this.mode.update(dt, this);
+
+    for (const tank of this.tanks) if (tank.alive) tank.syncMesh();
+
+    this.fx.update(dt);
+    this.camera.update(dt, this.player, this.fx.shake, this.player.weapon.scopeFov);
+    this.bundle.sun.position.set(this.player.position.x + 90, 150, this.player.position.z + 60);
+    this.bundle.sun.target.position.set(this.player.position.x, 0, this.player.position.z);
+    this.bundle.sun.target.updateMatrixWorld();
+
+    const result = this.mode.result(this.elapsed, this);
+    if (result.over) this.finished = { winner: result.winner, reason: result.reason };
+  }
+
+  private controlPlayer(dt: number, input: InputState): void {
+    const p = this.player;
+    if (!p.alive) {
+      this.selfDestructTimer = null;
+      return;
+    }
+
+    p.desiredYaw += input.yawDelta;
+    p.desiredPitch = clamp(p.desiredPitch + input.pitchDelta, -25 * DEG, 45 * DEG);
+    this.applyAimAssist(dt);
+    if (input.zoom) this.camera.zoom(input.zoom);
+
+    p.weapon.intent.fire = input.fire;
+    p.weapon.intent.alt = input.altFire;
+    p.weapon.intent.scope = input.scope;
+
+    if (input.supply != null) {
+      const kind = SUPPLY_ORDER[input.supply - 1];
+      if (kind) p.useSupply(kind, this);
+    }
+    if (input.overdrive) this.overdrives.activate(p, this);
+    if (input.flip) p.vehicle.requestFlip();
+
+    // Hold K for five seconds to scuttle. Costs a kill and five points, per
+    // the reference — it is an escape hatch from a bad position, not a free reset.
+    if (this.keyHeldSelfDestruct) {
+      this.selfDestructTimer = (this.selfDestructTimer ?? SELF_DESTRUCT_TIME) - dt;
+      if (this.selfDestructTimer <= 0) {
+        this.selfDestructTimer = null;
+        p.kills = Math.max(0, p.kills - 1);
+        p.score = Math.max(0, p.score - 5);
+        this.damage(p, p.health, p, { kind: 'self', ignoreArmor: true });
+      }
+    } else {
+      this.selfDestructTimer = null;
+    }
+
+    p.vehicle.update(dt, {
+      forward: input.forward,
+      turn: input.turn,
+      speedScale: p.status.movementScale,
+      locked: p.weapon.movementLocked,
+    });
+  }
+
+  keyHeldSelfDestruct = false;
+
+  /**
+   * Slight turret magnetism toward the nearest target in a small screen-space
+   * cone. Strong enough to reward roughly-correct aim, too weak to aim for you.
+   */
+  private applyAimAssist(dt: number): void {
+    const strength = this.profile.player.aimAssistStrength;
+    if (strength <= 0) return;
+    const p = this.player;
+    const from = p.muzzle(new CANNON.Vec3());
+    const dir = p.aimDirection(new CANNON.Vec3());
+    const cone = Math.cos(5 * DEG);
+
+    let best: Tank | null = null;
+    let bestDot = cone;
+    for (const t of this.tanks) {
+      if (!t.alive || !this.areEnemies(p, t)) continue;
+      const delta = t.centre().vsub(from);
+      const dist = delta.length();
+      if (dist > 160 || dist < 1) continue;
+      const dot = delta.scale(1 / dist).dot(dir);
+      if (dot <= bestDot) continue;
+      if (!this.phys.lineOfSight(from, t.centre(), p.vehicle.body)) continue;
+      bestDot = dot;
+      best = t;
+    }
+    if (!best) return;
+
+    const delta = best.centre().vsub(from);
+    const targetYaw = Math.atan2(delta.x, delta.z);
+    const targetPitch = Math.atan2(delta.y, Math.hypot(delta.x, delta.z));
+    const k = clamp(strength * dt * 4, 0, 0.5);
+    p.desiredYaw += shortestAngle(p.desiredYaw, targetYaw) * k;
+    p.desiredPitch += (targetPitch - p.desiredPitch) * k;
+  }
+
+  // ---- presentation -----------------------------------------------------
+
+  snapshot(): BattleSnapshot {
+    const scoreboard = [...this.tanks].sort((a, b) => b.score - a.score || b.kills - a.kills);
+    return {
+      player: this.player,
+      elapsed: this.elapsed,
+      timeLimit: this.settings.timeLimit,
+      modeCode: this.settings.mode,
+      modeLine: this.mode.hudLine(this.player.team),
+      notifications: this.notifications,
+      scoreboard,
+      teamScores: this.mode.teamScores(),
+      selfDestruct: this.selfDestructTimer,
+      over: this.finished !== null,
+      winner: this.finished?.winner,
+      reason: this.finished?.reason,
+    };
+  }
+
+  minimapMarkers(): {
+    tanks: { x: number; z: number; colour: number; you: boolean; yaw: number }[];
+    objectives: ReturnType<ModeController['markers']>;
+    pickups: ReturnType<PickupSystem['markers']>;
+    mines: { x: number; z: number }[];
+  } {
+    const tanks = this.tanks
+      .filter((t) => t.alive)
+      .filter((t) => t.isPlayer || this.areAllies(this.player, t) || this.isVisibleToPlayer(t))
+      .map((t) => ({
+        x: t.position.x,
+        z: t.position.z,
+        colour: t.isPlayer ? 0x2ee6a8 : this.areAllies(this.player, t) ? 0x3c7ce0 : 0xe0483c,
+        you: t.isPlayer,
+        yaw: t.vehicle.yaw,
+      }));
+    return {
+      tanks,
+      objectives: this.mode.markers(),
+      pickups: this.pickups.markers(),
+      mines: this.mines.visibleTo(this.player, this),
+    };
+  }
+
+  private isVisibleToPlayer(t: Tank): boolean {
+    if (t.status.has('reveal')) return true;
+    const from = this.player.turretOrigin(new CANNON.Vec3());
+    if (from.distanceTo(t.position) > 130) return false;
+    return this.phys.lineOfSight(from, t.centre(), this.player.vehicle.body);
+  }
+
+  /** Screen-space aim point for the reticle and the ballistic indicator. */
+  aimPoint(): CANNON.Vec3 {
+    return this.camera.aimPoint(this.player);
+  }
+
+  /** Predicted landing point for ballistic turrets, or null. */
+  ballisticLanding(): CANNON.Vec3 | null {
+    const t = this.player.turretDef;
+    if (!t.gravity || !t.projectileSpeed) return null;
+    const pos = this.player.muzzle(new CANNON.Vec3());
+    const vel = this.player.aimDirection(new CANNON.Vec3()).scale(t.projectileSpeed);
+    const step = 0.05;
+    for (let i = 0; i < 200; i++) {
+      const next = pos.vadd(vel.scale(step));
+      vel.y -= t.gravity * step;
+      const hit = this.phys.raycast(pos, next, WORLD_MASK, this.player.vehicle.body);
+      if (hit) return hit.point;
+      pos.copy(next);
+    }
+    return null;
+  }
+
+  resize(aspect: number): void {
+    this.camera.setAspect(aspect);
+  }
+
+  dispose(): void {
+    for (const tank of this.tanks) tank.dispose(this.bundle.scene);
+    this.tanks.length = 0;
+    this.projectiles.dispose();
+    this.pickups.dispose();
+    this.mines.dispose();
+    this.overdrives.dispose();
+    this.mode.dispose();
+    this.fx.dispose();
+    this.bundle.dispose();
+  }
+}
+
+function shortestAngle(from: number, to: number): number {
+  let d = (to - from) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
