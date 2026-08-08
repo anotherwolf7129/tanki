@@ -14,15 +14,18 @@ import {
   BOSS_REPAIR_AT,
   BOSS_REPAIR_DESPERATE,
   BOSS_REPAIR_QUIET,
-  COLLAPSE_DAMAGE_CENTRE,
-  COLLAPSE_DAMAGE_EDGE,
-  COLLAPSE_IMPULSE,
-  COLLAPSE_MAX_SPAN,
-  COLLAPSE_MIN_HEIGHT,
-  COLLAPSE_RADIUS,
-  COLLAPSE_REACH,
-  COLLAPSE_SITES,
-  ENRAGE_FIRE_RATE,
+  BOSS_SPEED_CAP,
+  METEOR_ALTITUDE,
+  METEOR_DIRECT,
+  METEOR_ENTRY_DEG,
+  METEOR_IMPULSE,
+  METEOR_INTERVAL,
+  METEOR_SHELL_RADIUS,
+  METEOR_SPEED,
+  METEOR_SPLASH_MAX,
+  METEOR_SPLASH_MIN,
+  METEOR_SPLASH_RADIUS,
+  METEOR_SPREAD,
   OVERCHARGE_DURATION,
   PHASE_PULSE_DAMAGE,
   PHASE_PULSE_IMPULSE,
@@ -32,13 +35,24 @@ import {
   QUAKE_DAMAGE_EDGE,
   QUAKE_IMPULSE,
   QUAKE_RADIUS,
+  RAM_COOLDOWN,
+  RAM_DAMAGE,
+  RAM_FROM_PHASE,
+  RAM_IMPULSE,
+  RAM_MIN_SPEED,
+  RAM_REACH,
+  RAM_SPEED_BONUS,
+  RAM_SPEED_WINDOW,
   REGEN_DELAY,
   REGEN_PER_SECOND,
   WIPE_REGEN_MULTIPLIER,
+  bossFireRate,
+  bossSpeedScale,
+  frenzyFor,
   type BossAbilityDef,
   type RaidPhase,
 } from '../data/raid';
-import type { MapDef, SupplyKind } from '../data/schema';
+import type { SupplyKind } from '../data/schema';
 import { angleDelta, ballisticPitch, clamp, DEG, predictIntercept, randRange } from '../core/mathx';
 import { WORLD_MASK } from '../physics/world';
 import type { Arena } from '../game/types';
@@ -64,8 +78,6 @@ export interface BossDeps {
   profile: DifficultyProfile;
   /** Live phase, owned by the raid mode and driven by the boss's health. */
   phase: () => RaidPhase;
-  /** The map, for the structures Structural Collapse brings down. */
-  def: MapDef;
   /** Nearest live supply box of the given kinds, so the boss can contest them. */
   nearestSupply: (from: CANNON.Vec3, kinds: SupplyKind[]) => { pos: CANNON.Vec3 } | null;
 }
@@ -74,7 +86,7 @@ interface Telegraph {
   def: BossAbilityDef;
   remaining: number;
   total: number;
-  /** Ground it has ranged, marked through the wind-up. Collapse only. */
+  /** Ground it has ranged, marked through the wind-up. Meteor Storm only. */
   points: CANNON.Vec3[];
 }
 
@@ -82,6 +94,14 @@ interface Barrage {
   remaining: number;
   timer: number;
   aim: CANNON.Vec3;
+}
+
+interface Storm {
+  /** Rocks still to drop. */
+  remaining: number;
+  timer: number;
+  /** Set once the first rock is aimed at ground the boss is standing on. */
+  warnedSelf: boolean;
 }
 
 /**
@@ -105,19 +125,22 @@ interface Barrage {
  *   and refuses to be surrounded, because its engine deck is where the damage
  *   is. Reaching that deck is a manoeuvre you have to earn.
  * - **It spends abilities on reasons.** Quake when raiders stack on it, Barrage
- *   when they hide, Collapse when they hide *behind* something, Overcharge when
- *   someone is isolated — each with a visible wind-up, so every one of them is
- *   something you could have avoided.
- * - **It fights with the map.** Structural Collapse drops the cover the raid is
- *   standing behind onto the raid, several structures at once. Between it and
- *   the barrage, the only ground it has no answer to is open ground — which is
- *   where its main gun lives.
+ *   when they hide, a Meteor Storm when hiding is all they are doing,
+ *   Overcharge when someone is isolated — each with a visible wind-up, so every
+ *   one of them is something you could have avoided.
+ * - **It brings the sky down.** The Meteor Storm walks a line of impacts across
+ *   wherever it last saw anybody, each rock marked on the ground for its whole
+ *   flight and each one lethal to a light hull. It does not aim them around
+ *   itself, so fighting *inside* a storm is the fastest damage in the mode and
+ *   very nearly suicide.
  * - **It heals like a player.** Repair kits, its own Purge, and the map's
  *   supply boxes, which it will break off and drive to when it is hurt. None of
  *   it can take the boss back through a phase gate.
- * - **It gets angry.** Each phase gate shortens its cooldowns and adds a round
- *   to every trigger pull, and crossing one throws the raid off it. Below 15%
- *   it goes berserk: permanently supercharged, permanently moving.
+ * - **It gets angry, and it keeps getting angrier.** Each gate shortens its
+ *   cooldowns, adds a round to every trigger pull, and makes it faster and
+ *   harder-hitting; from Siege on it will simply drive through you. Below 15%
+ *   it goes berserk — and inside berserk it *still* accelerates, worst in the
+ *   last seconds before it dies.
  * - **It will not be waited out.** Break contact entirely and it repairs, six
  *   times faster while the whole raid is dead at once.
  */
@@ -135,18 +158,19 @@ export class BossController implements AiController {
 
   private telegraph: Telegraph | null = null;
   private barrage: Barrage | null = null;
+  private storm: Storm | null = null;
   private readonly readyAt: Record<BossAbilityDef['id'], number> = {
     quake: 12,
-    collapse: 20,
+    meteor: 18,
     barrage: 8,
     overcharge: 30,
   };
   private chargeUntil = -1;
   private pulseTimer = 0;
   private markerTimer = 0;
+  /** When each raider may next be run over, keyed by tank id. */
+  private readonly ramReadyAt = new Map<number, number>();
 
-  /** Every structure on the map worth dropping on somebody. */
-  private readonly structures: CANNON.Vec3[];
   private lastPhase = 1;
   private boxGoal: CANNON.Vec3 | null = null;
 
@@ -180,19 +204,19 @@ export class BossController implements AiController {
       losCheck: true,
       hearsGunfireRadius: 90,
     });
-    this.structures = collapsibleStructures(deps.def);
   }
 
   // ---- HUD / mode-facing state -----------------------------------------
 
   get telegraphName(): string | null {
+    if (this.storm) return BOSS_ABILITIES.meteor.displayName;
     if (this.barrage) return BOSS_ABILITIES.barrage.displayName;
     return this.telegraph?.def.displayName ?? null;
   }
 
   /** 0..1 through the current wind-up, for the HUD's warning bar. */
   get telegraphProgress(): number {
-    if (!this.telegraph) return this.barrage ? 1 : 0;
+    if (!this.telegraph) return this.barrage || this.storm ? 1 : 0;
     return clamp(1 - this.telegraph.remaining / this.telegraph.total, 0, 1);
   }
 
@@ -234,9 +258,11 @@ export class BossController implements AiController {
     this.updateEnrage(dt);
     this.updateTelegraph(dt);
     this.updateBarrage(dt);
+    this.updateStorm(dt);
     this.updateAim(dt);
     this.updateFiring();
     this.updateMovement(dt);
+    this.updateRam();
     this.updateRepair(dt);
   }
 
@@ -244,6 +270,7 @@ export class BossController implements AiController {
     this.target = null;
     this.telegraph = null;
     this.barrage = null;
+    this.storm = null;
     this.path = [];
     this.goal = null;
     this.boxGoal = null;
@@ -468,7 +495,11 @@ export class BossController implements AiController {
     weapon.intent.scope = false;
 
     // Committed to an ability: the main gun waits. That pause is the tell.
-    if (this.telegraph || this.barrage) {
+    //
+    // Berserk is where that stops being true for the storm: rocks falling *and*
+    // the gun still working is the difference between an ability the raid waits
+    // out and an ability the raid has to survive.
+    if (this.telegraph || this.barrage || (this.storm && !this.deps.phase().enraged)) {
       weapon.intent.fire = false;
       return;
     }
@@ -509,10 +540,11 @@ export class BossController implements AiController {
   /**
    * Each ability answers a specific problem the raid is causing it, so the one
    * it picks is readable from the outside: stack on it and it quakes, hide and
-   * it lobs, spread out and it picks the loner off.
+   * it lobs, keep hiding and the sky comes down, spread out and it picks the
+   * loner off.
    */
   private considerAbility(now: number): void {
-    if (this.telegraph || this.barrage) return;
+    if (this.telegraph || this.barrage || this.storm) return;
 
     const arena = this.deps.arena;
     const phase = this.deps.phase();
@@ -521,13 +553,15 @@ export class BossController implements AiController {
     const track = this.currentTrack();
 
     const close = raiders.filter((t) => t.position.distanceTo(here) <= QUAKE_RADIUS * 0.85);
-    const sites = this.collapseSites(phase);
+    const accounted = this.perception.remembered().filter((t) => t.tank.alive);
+    const hiding = accounted.some((t) => !t.visible);
     const wants: BossAbilityDef['id'][] = [];
 
     if (close.length >= 2 || (close.length === 1 && this.self.healthFraction < 0.5)) wants.push('quake');
-    // Cover is a problem it solves by removing the cover. Two raiders sheltering
-    // is worth it outright; from Siege onward, one is enough.
-    if (sites.length >= 2 || (sites.length >= 1 && phase.index >= 2)) wants.push('collapse');
+    // The storm is what it does when shooting is not working: somebody is behind
+    // something, or there are simply too many of them to shoot one at a time. It
+    // stops needing a reason at all once it is angry.
+    if (accounted.length && (hiding || accounted.length >= 2 || phase.index >= 2)) wants.push('meteor');
     if ((track && !track.visible) || this.densestCluster(raiders) >= 2) wants.push('barrage');
     if (
       phase.index >= 2 &&
@@ -545,7 +579,7 @@ export class BossController implements AiController {
         def,
         remaining: def.windup,
         total: def.windup,
-        points: id === 'collapse' ? sites : [],
+        points: id === 'meteor' ? this.stormSites() : [],
       };
       this.readyAt[id] = now + def.windup + def.cooldown * phase.cooldownScale;
       arena.notify(def.warning, 'warning');
@@ -554,34 +588,19 @@ export class BossController implements AiController {
   }
 
   /**
-   * The structures it would bring down right now: whatever each raider it can
-   * account for is sheltering against, nearest first, capped by phase.
-   *
-   * Remembered contacts count as well as visible ones — a raider that has just
-   * ducked behind a block is exactly who this ability is for, and the boss
-   * watching them do it is the whole reason it knows where they went.
+   * The ground it is ranging for a storm: everyone it can currently account
+   * for, remembered contacts included. A raider that has just ducked out of
+   * sight is exactly who the storm is for, and these are the marks the wind-up
+   * paints — where the first rocks will land, published before they fall.
    */
-  private collapseSites(phase: RaidPhase): CANNON.Vec3[] {
-    if (!this.structures.length) return [];
-    const limit = COLLAPSE_SITES[Math.min(COLLAPSE_SITES.length - 1, phase.index - 1)];
+  private stormSites(): CANNON.Vec3[] {
     const out: CANNON.Vec3[] = [];
-
     for (const track of this.perception.remembered()) {
-      if (!track.tank.alive || out.length >= limit) continue;
-      const at = track.visible ? track.tank.position : track.lastKnown;
-
-      let best: CANNON.Vec3 | null = null;
-      let bestD = COLLAPSE_REACH;
-      for (const s of this.structures) {
-        const d = Math.hypot(s.x - at.x, s.z - at.z);
-        if (d < bestD) {
-          bestD = d;
-          best = s;
-        }
-      }
-      // One structure can only fall once, however many raiders are behind it.
-      if (best && !out.some((p) => p.distanceTo(best!) < 1)) out.push(best);
+      if (!track.tank.alive) continue;
+      out.push((track.visible ? track.tank.position : track.lastKnown).clone());
     }
+    // Nobody left to range: it shells its own ground rather than not shelling.
+    if (!out.length) out.push(this.self.position.clone());
     return out;
   }
 
@@ -608,14 +627,14 @@ export class BossController implements AiController {
       this.deps.arena.fx.supplyBurst(this.self.position, 0xff4d4d, 1.6 + this.telegraphProgress * 2.4);
     }
 
-    // Ranged ground is marked where it is, not only at the hull. A collapse you
-    // cannot see coming is a collapse you were not given the chance to leave.
+    // Ranged ground is marked where it is, not only at the hull. A storm you
+    // cannot see coming is a storm you were not given the chance to leave.
     if (t.points.length) {
       this.markerTimer -= dt;
       if (this.markerTimer <= 0) {
         this.markerTimer = 0.22;
         for (const p of t.points) {
-          this.deps.arena.fx.supplyBurst(p, 0xfbbf24, 2.2 + this.telegraphProgress * 3);
+          this.deps.arena.fx.supplyBurst(p, 0xff5a1f, 2.2 + this.telegraphProgress * 3);
         }
       }
     }
@@ -629,35 +648,10 @@ export class BossController implements AiController {
   private execute(def: BossAbilityDef, points: CANNON.Vec3[]): void {
     const arena = this.deps.arena;
     switch (def.id) {
-      case 'collapse': {
-        // Resolved by hand rather than through `arena.splash`, because a blast
-        // check that respects line of sight would be stopped by the very wall
-        // this ability is dropping. Masonry landing on you does not care which
-        // side of it you were standing on.
-        const caught = new Map<Tank, number>();
-        for (const p of points) {
-          arena.fx.explosion(p, COLLAPSE_RADIUS * 0.55, 0x9ca3af);
-          arena.fx.smoke(p, 4.5, 2.2, { x: 0, y: 2.4, z: 0 });
-          for (const t of arena.tanks) {
-            if (t === this.self || !t.alive || !arena.areEnemies(this.self, t)) continue;
-            // Measured along the ground: the marker sits on top of the structure
-            // so it can be seen, but what lands is the structure's whole footprint.
-            const dist = Math.hypot(t.position.x - p.x, t.position.z - p.z);
-            if (dist > COLLAPSE_RADIUS) continue;
-            const k = clamp(dist / COLLAPSE_RADIUS, 0, 1);
-            const dmg = COLLAPSE_DAMAGE_CENTRE + (COLLAPSE_DAMAGE_EDGE - COLLAPSE_DAMAGE_CENTRE) * k;
-            // Standing between two collapsing structures is worse than standing
-            // beside one, but not twice as bad — the heavier of the two lands.
-            caught.set(t, Math.max(caught.get(t) ?? 0, dmg));
-          }
-        }
-        for (const [t, dmg] of caught) {
-          const push = new CANNON.Vec3(randRange(-1, 1), 1.1, randRange(-1, 1));
-          push.normalize();
-          t.vehicle.applyImpulse(push, COLLAPSE_IMPULSE);
-          arena.damage(t, dmg, this.self, { kind: 'splash', at: t.centre() });
-        }
-        if (caught.size) arena.notify('The structures came down', 'warning');
+      case 'meteor': {
+        this.storm = { remaining: this.deps.phase().meteors, timer: 0, warnedSelf: false };
+        for (const p of points) arena.fx.explosion(p, 3, 0xff5a1f);
+        arena.notify('The sky is coming down — keep moving', 'warning');
         break;
       }
       case 'quake': {
@@ -758,6 +752,106 @@ export class BossController implements AiController {
       trail: true,
     });
     arena.fx.muzzleFlash(muzzle, new CANNON.Vec3(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp), 0xff8844);
+  }
+
+  // ---- meteor storm -----------------------------------------------------
+
+  private updateStorm(dt: number): void {
+    const s = this.storm;
+    if (!s) return;
+    s.timer -= dt;
+    if (s.timer > 0) return;
+    s.timer = METEOR_INTERVAL;
+    s.remaining -= 1;
+    this.dropMeteor(s);
+    if (s.remaining <= 0) this.storm = null;
+  }
+
+  /**
+   * One rock. It comes in off the top of the sky on a steep line from a random
+   * bearing — a real projectile, flown and swept like any other shell, so it can
+   * be caught on a roof and can hit somebody on the way down.
+   *
+   * `selfDamage` is what puts the Overseer inside its own bombardment. The sweep
+   * skips the firing hull, as it does for every shell in the game, so a rock
+   * aimed at the boss's feet passes through it and detonates on the deck under
+   * it — the blast is what catches it, at point-blank range, which lands in the
+   * same place.
+   *
+   * The ground ring is spawned with exactly the flight time and closes over it,
+   * so the marker is not an approximation of when it lands: it *is* when it
+   * lands, and a raider who reads it is a raider who is somewhere else.
+   */
+  private dropMeteor(storm: Storm): void {
+    const arena = this.deps.arena;
+    const aim = this.meteorAim();
+    const impact = new CANNON.Vec3(
+      aim.x + randRange(-METEOR_SPREAD, METEOR_SPREAD),
+      aim.y,
+      aim.z + randRange(-METEOR_SPREAD, METEOR_SPREAD),
+    );
+
+    const bearing = Math.random() * Math.PI * 2;
+    const lateral = METEOR_ALTITUDE / Math.tan(METEOR_ENTRY_DEG * DEG);
+    const from = new CANNON.Vec3(
+      impact.x + Math.sin(bearing) * lateral,
+      impact.y + METEOR_ALTITUDE,
+      impact.z + Math.cos(bearing) * lateral,
+    );
+    const delta = impact.vsub(from);
+    const flight = delta.length() / METEOR_SPEED;
+
+    arena.fx.incoming(impact, 0xff5a1f, METEOR_SPLASH_RADIUS, flight);
+    arena.spawnProjectile({
+      owner: this.self,
+      turret: this.self.turretDef,
+      position: from,
+      direction: delta,
+      speed: METEOR_SPEED,
+      // Flat with range: this is a rock arriving, not a shot being taken.
+      damage: METEOR_DIRECT,
+      weakDamage: METEOR_DIRECT,
+      impactForce: METEOR_IMPULSE,
+      // The whole point. It is shelling coordinates, and it is standing in them.
+      selfDamage: true,
+      colour: 0xff6a24,
+      radius: METEOR_SHELL_RADIUS,
+      splash: {
+        radius: METEOR_SPLASH_RADIUS,
+        damageMax: METEOR_SPLASH_MAX,
+        damageMin: METEOR_SPLASH_MIN,
+      },
+      maxLife: flight + 1.5,
+      trail: true,
+      smokeTrail: true,
+    });
+
+    if (
+      !storm.warnedSelf &&
+      Math.hypot(impact.x - this.self.position.x, impact.z - this.self.position.z) <= METEOR_SPLASH_RADIUS
+    ) {
+      storm.warnedSelf = true;
+      arena.notify(`${this.self.name} is walking the storm over its own position`, 'warning');
+    }
+  }
+
+  /**
+   * Where the next rock goes: somebody it can account for, the one it is
+   * hunting counted twice. Nothing here checks whether the boss is standing in
+   * the blast — deliberately. A raid that fights it inside its own storm is
+   * trading its hulls for the Overseer's health bar, and that trade is the
+   * ability.
+   */
+  private meteorAim(): CANNON.Vec3 {
+    const pool: CANNON.Vec3[] = [];
+    for (const track of this.perception.remembered()) {
+      if (!track.tank.alive) continue;
+      const at = track.visible ? track.tank.position : track.lastKnown;
+      pool.push(at.clone());
+      if (track.tank === this.target) pool.push(at.clone());
+    }
+    if (!pool.length) return this.self.position.clone();
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   /**
@@ -862,15 +956,62 @@ export class BossController implements AiController {
     if (phase.enraged) arena.notify(`${this.self.name} IS BERSERK`, 'warning');
   }
 
-  /** Berserk is a standing effect, so it is topped up rather than applied once. */
+  /**
+   * Berserk is a standing effect, so it is topped up rather than applied once —
+   * and it is re-read from the health bar every tick rather than latched, which
+   * is what lets the frenzy ramp keep tightening the reload all the way down to
+   * zero. Speed and damage are not applied here: they are multipliers the hull
+   * and the damage funnel read directly, so there is one place each.
+   *
+   * The hull pulse quickens with the frenzy, so the last stretch of the fight
+   * looks like what it is before anyone has read a number.
+   */
   private updateEnrage(dt: number): void {
     if (!this.deps.phase().enraged) return;
-    this.self.status.apply('supercharge', ENRAGE_FIRE_RATE, 2, this.self.id);
-    this.self.status.apply('nitro', 1, 2, this.self.id);
-    this.pulseTimer -= dt * 0.5;
+    const frenzy = frenzyFor(this.self.healthFraction);
+    this.self.status.apply('supercharge', bossFireRate(this.self.healthFraction), 2, this.self.id);
+    this.pulseTimer -= dt * (0.5 + frenzy * 1.6);
     if (this.pulseTimer <= 0 && !this.telegraph) {
       this.pulseTimer = 0.5;
-      this.deps.arena.fx.supplyBurst(this.self.position, 0xf87171, 2.2);
+      this.deps.arena.fx.supplyBurst(this.self.position, 0xf87171, 2.2 + frenzy * 2);
+    }
+  }
+
+  /**
+   * Running raiders over. A six-tonne hull moving at siege speed is a weapon in
+   * its own right, and without this the answer to a boss that has doubled its
+   * speed is to stand where it cannot depress its gun — which would make the
+   * whole escalation something you solve by hugging it.
+   *
+   * Per-raider cooldown, so being scraped along a wall is one hit rather than
+   * sixty, and the damage scales with how fast it was actually going.
+   */
+  private updateRam(): void {
+    if (this.deps.phase().index < RAM_FROM_PHASE) return;
+    const arena = this.deps.arena;
+    const speed = this.self.vehicle.speed;
+    if (speed < RAM_MIN_SPEED) return;
+
+    const size = this.self.hull.size;
+    const half = Math.max(size[0], size[2]) / 2;
+    const over = Math.min(speed - RAM_MIN_SPEED, RAM_SPEED_WINDOW);
+
+    for (const t of arena.tanks) {
+      if (t === this.self || !t.alive || !arena.areEnemies(this.self, t)) continue;
+      const reach = half + Math.max(t.hull.size[0], t.hull.size[2]) / 2 + RAM_REACH;
+      if (this.self.position.distanceTo(t.position) > reach) continue;
+      if (arena.time < (this.ramReadyAt.get(t.id) ?? 0)) continue;
+      this.ramReadyAt.set(t.id, arena.time + RAM_COOLDOWN);
+
+      const at = t.centre();
+      arena.damage(t, RAM_DAMAGE + RAM_SPEED_BONUS * over, this.self, { kind: 'contact', at });
+      const push = t.position.vsub(this.self.position);
+      push.y = 0;
+      if (push.lengthSquared() < 1e-4) push.set(0, 0, 1);
+      push.normalize();
+      push.y = 0.45;
+      t.vehicle.applyImpulse(push, RAM_IMPULSE);
+      arena.fx.impact(at, new CANNON.Vec3(0, 1, 0), 0xff7a2f, 1.6);
     }
   }
 
@@ -892,8 +1033,11 @@ export class BossController implements AiController {
       return;
     }
 
-    // Overcharged, it stops managing range and simply runs someone down.
-    if (this.deps.arena.time < this.chargeUntil) {
+    // Overcharged — or berserk, which is the same thing permanently — it stops
+    // managing range, stops looking for a wall to put its back against, and
+    // simply drives at whoever it wants. At Wrath speed that is not a worse
+    // position for it, it is the shortest line to a ram.
+    if (this.deps.arena.time < this.chargeUntil || this.deps.phase().enraged) {
       this.setGoal(track.lastKnown.clone());
       return;
     }
@@ -1054,7 +1198,13 @@ export class BossController implements AiController {
     vehicle.update(dt, {
       forward,
       turn,
-      speedScale: this.self.status.movementScale,
+      // The phase multiplier is the escalation the raid feels first: by Wrath
+      // this hull is quicker than every medium in the garage, and it is still
+      // accelerating as the bar empties. Capped so it stays a tank.
+      speedScale: Math.min(
+        BOSS_SPEED_CAP,
+        this.self.status.movementScale * bossSpeedScale(this.self.healthFraction),
+      ),
       locked: this.self.weapon.movementLocked,
     });
   }
@@ -1167,33 +1317,4 @@ export class BossController implements AiController {
       arena.fx.supplyBurst(this.self.position, 0x86efac, 2);
     }
   }
-}
-
-/**
- * Everything on the map the Overseer can drop on somebody, resolved once at
- * spawn because map geometry never changes mid-battle.
- *
- * Cover, specifically — not terrain. A prop only qualifies if it is tall enough
- * to hide behind and small enough to be a *thing* rather than the floor the
- * fight is happening on, which keeps perimeter walls, ground platforms and
- * bridge decks out of it. Supply drop zones are in the list too: a crate of
- * ordnance is exactly the sort of thing an Overseer would rather cook off than
- * let the raid stand on, and it means every map has sites even where cover is
- * thin.
- *
- * The blast point sits at the top of the structure, because that is where the
- * collapse starts and where the marker needs to be visible from.
- */
-function collapsibleStructures(def: MapDef): CANNON.Vec3[] {
-  const out: CANNON.Vec3[] = [];
-  for (const p of def.props) {
-    const [w, h, d] = p.size;
-    if (h < COLLAPSE_MIN_HEIGHT) continue;
-    if (Math.max(w, d) > COLLAPSE_MAX_SPAN) continue;
-    out.push(new CANNON.Vec3(p.pos[0], p.pos[1] + h / 2, p.pos[2]));
-  }
-  for (const zone of def.supplyZones) {
-    out.push(new CANNON.Vec3(zone.pos[0], zone.pos[1] + 1.5, zone.pos[2]));
-  }
-  return out;
 }

@@ -137,16 +137,19 @@ off, working round to the deck while it is busy elsewhere — is the mode.
   refuses positions where the raid has it ringed, and turns its glacis toward whoever it is fighting
   when it stops. Reaching the deck is a manoeuvre you have to earn.
 - **It spends abilities on reasons.** *Quake* when raiders stack on it, *Siege Barrage* — a lobbed
-  salvo that does not care about your cover — when they hide or bunch up at range, *Structural
-  Collapse* when they hide behind something, *Overcharge* when someone is isolated, and *Purge* to
-  throw the raid off it. Each has a wind-up, a kill-feed warning and a pulsing ring at the hull, so
-  every one of them is something you could have avoided.
-- **It fights with the map.** *Structural Collapse* ranges the cover the raid is actually using —
-  the block you are shooting from behind, the crate you are reloading against, the supply drop
-  everyone converges on — marks every one of them for two seconds, and brings them down on top of
-  you. Falling masonry does not check line of sight: being on the far side of the wall is not a
-  defence when the wall is what is landing. Between the collapse and the barrage, the only ground it
-  has no answer to is open ground — which is where its main gun lives. That is the trap.
+  salvo that does not care about your cover — when they hide or bunch up at range, a *Meteor Storm*
+  when hiding is all anybody is doing, *Overcharge* when someone is isolated, and *Purge* to throw
+  the raid off it. Each has a wind-up, a kill-feed warning and a pulsing ring at the hull, so every
+  one of them is something you could have avoided.
+- **It brings the sky down.** The *Meteor Storm* stops fighting the raid and starts shelling the
+  ground the raid is standing on: four to thirteen rocks depending on the phase, one every third of
+  a second, walking across wherever it last accounted for anybody. Each one comes in off the top of
+  the sky as a real projectile with a ring closing on the ground for exactly its flight time, and
+  each one kills a light hull outright — cover overhead is the only thing that stops it, and open
+  ground is where its main gun lives. **It does not aim them around itself.** The Overseer takes a
+  quarter of its own bombardment, so a raid that holds its ground under a storm is a raid making the
+  boss help kill it. That trade — the fastest damage in the mode against very nearly the fastest way
+  to lose the squad — is the best thirty seconds of the fight.
 - **It heals like a player.** It carries repair kits and spends them the way you do — and the
   over-time half is interrupted by damage exactly as yours is, so a boss that has just cracked one
   open is a boss you can punish for it. When it runs out it drives to the boxes on the floor, which
@@ -161,12 +164,20 @@ off, working round to the deck while it is busy elsewhere — is the mode.
 mistake. Heavy hulls take ×0.86 of it, which is the whole reason to bring one. It is the only place
 in the game where hull class changes how much damage you *take*.
 
-**Phases change tempo and volume, never armour.** At 66%, 33% and 15% its cooldowns shorten and its
-main gun goes from one shell a pull to two, three, then four fanned out either side of where you
-were about to dodge. Crossing a gate announces itself and throws the raid off the hull with a
-pressure wave, and the last one turns the Overseer berserk: permanently supercharged, permanently
-moving. A boss that quietly gains armour reads as cheating; a boss that fires four shells at once
-reads as angry.
+**Phases change tempo, volume, speed and force — never armour.** At 66%, 33% and 15% its cooldowns
+shorten, its main gun goes from one shell a pull to two, three, then four fanned out either side of
+where you were about to dodge, and — the two you feel in your hands rather than read off the HUD —
+its hull speed climbs to ×1.85 and everything it does to you lands for ×1.75. From Siege onward it
+stops going *around* raiders and simply drives through them, and a six-tonne hull arriving at speed
+does real damage. Crossing a gate announces itself and throws the raid off the hull with a pressure
+wave, and the last one turns the Overseer berserk: permanently supercharged, no longer managing
+range, driving at whoever it wants.
+
+**And berserk is a slope, not a switch.** Inside that last phase it keeps accelerating as the bar
+empties — speed, damage and reload all ramp again from 15% down to zero, up to ×2.30 speed and
+×2.25 damage in the seconds before it dies. Both multipliers are printed live next to the phase
+name on the boss bar, because a boss that is suddenly outrunning you should be one you can see has
+been given the speed, not one you suspect of cheating.
 
 **Reinforcements are unlimited.** Nobody is ever benched — the squad always comes back. What a death
 costs is *time*: the wait climbs from four seconds toward twelve as the raid takes losses, and every

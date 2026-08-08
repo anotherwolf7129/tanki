@@ -42,6 +42,8 @@ export interface ProjectileSpawn {
   /** Range falloff is measured from the muzzle, not from the shooter. */
   maxLife?: number;
   trail?: boolean;
+  /** Forces the exhaust plume on a shell that is neither guided nor lobbed. */
+  smokeTrail?: boolean;
 }
 
 export interface Notification {

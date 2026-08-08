@@ -17,7 +17,9 @@ import {
   RAID_PHASES,
   RESPAWN_BASE,
   RESPAWN_MAX,
+  bossDamageScale,
   bossHealth,
+  bossSpeedScale,
 } from '../data/raid';
 import type { ModeCode } from '../data/schema';
 import type { PlayerLoadout } from '../game/battle';
@@ -112,6 +114,10 @@ export class Menu {
     if (!availableMaps.includes(settings.mapId)) settings.mapId = availableMaps[0] ?? MAP_IDS[0];
     const mapChoice = MAPS[settings.mapId];
     const raid = settings.mode === 'RAID';
+    // What the Overseer works up to on its way down. Quoted from the same
+    // functions the fight runs on, so the ledger cannot drift from the boss.
+    const maxSpeedScale = bossSpeedScale(0);
+    const maxDamageScale = bossDamageScale(0);
     // Each mode races to its own number in its own unit, so the slider is
     // rebuilt from the mode rather than being one shared "kill limit".
     const limitSpec = MODES[settings.mode].limit;
@@ -256,7 +262,8 @@ export class Menu {
               <h3>What it does to you</h3>
               <ul>
                 <li>Its ordnance lands for ×${(BOSS_LETHALITY * BOSS_CLASS_LETHALITY.light).toFixed(2)} on a light hull, ×${(BOSS_LETHALITY * BOSS_CLASS_LETHALITY.medium).toFixed(2)} medium, ×${(BOSS_LETHALITY * BOSS_CLASS_LETHALITY.heavy).toFixed(2)} heavy — one shell nearly kills a light</li>
-                <li>Structural Collapse drops the cover you are using onto you; open ground is the only answer</li>
+                <li>Meteor Storm walks ${RAID_PHASES[0].meteors}–${RAID_PHASES[RAID_PHASES.length - 1].meteors} rocks across you — a direct hit kills a light outright, and it does not aim them around itself</li>
+                <li>It gets faster and hits harder every phase, up to ×${maxSpeedScale.toFixed(2)} speed and ×${maxDamageScale.toFixed(2)} damage — and from Siege on it will simply drive through you</li>
                 <li>Unlimited reinforcements — but the wait climbs from ${RESPAWN_BASE}s toward ${RESPAWN_MAX}s as the squad dies</li>
                 <li>${RAID_PHASES.map((p) => `${p.name} ${Math.round(p.from * 100)}% (${p.salvo}×)`).join(' · ')}</li>
               </ul>

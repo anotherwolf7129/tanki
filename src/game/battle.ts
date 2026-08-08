@@ -261,7 +261,6 @@ export class Battle implements Arena {
       nav: this.nav,
       profile: this.profile,
       phase: () => phaseFor(boss.healthFraction),
-      def: this.def,
       nearestSupply: (from, kinds) => this.pickups.nearest(from, kinds),
     });
     boss.ai = ai;

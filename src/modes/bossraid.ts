@@ -6,8 +6,11 @@ import {
   BOSS_LETHALITY,
   BREACH_COS,
   BREACH_MULTIPLIER,
+  METEOR_SELF_DAMAGE,
   PLAYER_BOSS_DAMAGE,
   POINTS_PER_DAMAGE,
+  bossDamageScale,
+  bossSpeedScale,
   phaseFor,
   RAID_PHASES,
   respawnDelayFor,
@@ -37,6 +40,11 @@ const TMP_FORWARD = new CANNON.Vec3();
  * - Its shells are siege ordnance, sized against armour rather than against
  *   tanks. A light hull comes out of a direct hit on a sliver; a heavy one is
  *   the reason to bring a heavy one.
+ * - Every gate it crosses makes it faster and makes its ordnance land harder,
+ *   and inside the last phase both keep climbing as the bar empties. The fight
+ *   is at its most dangerous in the seconds before it ends.
+ * - Its Meteor Storm is not aimed around itself. Fighting inside one is the
+ *   fastest damage in the mode and the fastest way to lose the squad.
  * - Nobody runs out of lives. What a death costs is time, and the price climbs
  *   with every death the raid has already taken — while the boss, left alone,
  *   repairs.
@@ -75,13 +83,26 @@ export class BossRaidMode extends BaseMode {
     arena: Arena,
     _amount: number,
   ): number {
-    if (!this.boss || !source || source === target) return 1;
+    if (!this.boss || !source) return 1;
+
+    // Its own storm, landing on it. The Overseer is armoured against ordnance it
+    // designed and takes a reduced share — but it takes one, and a raid that
+    // holds its ground under a bombardment is a raid making the boss kill
+    // itself. Nothing else in the game damages its own owner, so this is the
+    // only case that has to be caught before the self-damage bail-out below.
+    if (source === target) return target === this.boss ? METEOR_SELF_DAMAGE : 1;
 
     // Outbound: siege ordnance. The Overseer's gun was authored to fight tanks
     // and it is besieging them instead, so everything it does lands harder, and
-    // hardest of all on the hulls that were never built to take a shell.
+    // hardest of all on the hulls that were never built to take a shell — and
+    // harder still the angrier it is, which is the escalation you feel rather
+    // than read.
     if (source === this.boss) {
-      return BOSS_LETHALITY * (BOSS_CLASS_LETHALITY[target.hull.class] ?? 1);
+      return (
+        BOSS_LETHALITY *
+        (BOSS_CLASS_LETHALITY[target.hull.class] ?? 1) *
+        bossDamageScale(this.boss.healthFraction)
+      );
     }
 
     if (target !== this.boss) return 1;
@@ -224,6 +245,8 @@ export class BossRaidMode extends BaseMode {
       losses: this.losses,
       respawnDelay: respawnDelayFor(this.losses),
       enraged: phase.enraged === true,
+      speedScale: bossSpeedScale(this.boss.healthFraction),
+      damageScale: bossDamageScale(this.boss.healthFraction),
       telegraph: this.bossAi?.telegraphName ?? null,
       telegraphProgress: this.bossAi?.telegraphProgress ?? 0,
     };
