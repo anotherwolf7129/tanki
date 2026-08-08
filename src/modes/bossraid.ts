@@ -7,6 +7,7 @@ import {
   BREACH_COS,
   BREACH_MULTIPLIER,
   BOSS_SELF_DAMAGE,
+  KILL_HEAL_FRACTION,
   PLAYER_BOSS_DAMAGE,
   POINTS_PER_DAMAGE,
   bossDamageScale,
@@ -173,7 +174,38 @@ export class BossRaidMode extends BaseMode {
       killer.kills += 1;
       killer.addBattlePoints(10);
       victim.score = Math.max(0, victim.score - 5);
+      this.feed(victim, arena);
     }
+  }
+
+  /**
+   * It feeds.
+   *
+   * Nobody runs out of lives, so a death used to cost tempo and nothing else —
+   * and a death that costs only tempo is a death nobody dreads. So the Overseer
+   * takes something for it, and it takes it on the one instrument the entire
+   * raid is already staring at: the bar goes *up*.
+   *
+   * The heal is small. It is not meant to threaten the raid's progress, it is
+   * meant to be *watched* — the number that made you flinch when it was your
+   * squadmate is the same number that will be yours in four seconds. And like
+   * every other heal the boss has it is clamped to the top of the phase it is
+   * currently in, so a squad that is dying badly loses ground and morale but can
+   * never be pushed back through a gate it has already bought.
+   */
+  private feed(victim: Tank, arena: Arena): void {
+    const boss = this.boss;
+    if (!boss || !boss.alive) return;
+    const ceiling = boss.maxHealth * this.phase.from;
+    const gain = Math.min(boss.maxHealth * KILL_HEAL_FRACTION, ceiling - boss.health);
+    if (gain <= 0) return;
+
+    arena.heal(boss, gain, boss);
+    arena.fx.supplyBurst(boss.position, 0x86efac, 3.2);
+    arena.notify(
+      `${boss.name} fed on ${victim.isPlayer ? 'you' : victim.name} — +${Math.round(gain)}`,
+      'warning',
+    );
   }
 
   /**
@@ -250,6 +282,11 @@ export class BossRaidMode extends BaseMode {
       damageScale: bossDamageScale(this.boss.healthFraction),
       telegraph: this.bossAi?.telegraphName ?? null,
       telegraphProgress: this.bossAi?.telegraphProgress ?? 0,
+      markedName: this.bossAi?.marked?.name ?? null,
+      markedPlayer: !!player && this.bossAi?.marked === player,
+      markRemaining: this.bossAi?.markRemaining ?? 0,
+      markBreak: this.bossAi?.markBreakProgress ?? 0,
+      dread: this.bossAi?.dreadLevel ?? 0,
     };
   }
 

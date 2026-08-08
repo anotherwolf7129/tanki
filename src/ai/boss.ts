@@ -19,6 +19,14 @@ import {
   BOSS_REPAIR_DESPERATE,
   BOSS_REPAIR_QUIET,
   BOSS_SPEED_CAP,
+  DREAD_RADIUS,
+  DREAD_SHAKE,
+  MARK_BREAK_DAMAGE,
+  MARK_DURATION,
+  MARK_FROM_PHASE,
+  MARK_SPEED_BONUS,
+  TELEGRAPH_STILLNESS,
+  markCooldownFor,
   METEOR_ALTITUDE,
   METEOR_DIRECT,
   METEOR_ENTRY_DEG,
@@ -147,6 +155,18 @@ interface Storm {
  * - **It heals like a player.** Repair kits, its own Purge, and the map's
  *   supply boxes, which it will break off and drive to when it is hurt. None of
  *   it can take the boss back through a phase gate.
+ * - **It chooses somebody.** From Siege on it periodically stops arbitrating
+ *   between threat scores and marks one raider by name. While a mark is running
+ *   the threat table is not consulted: it drives at its quarry and nothing that
+ *   raider does moves the gun. The only way out is the rest of the squad doing
+ *   enough damage to drag its head round — the one thing in this fight nobody
+ *   can solve alone.
+ * - **It goes quiet before it strikes.** The last stretch of every wind-up is
+ *   silent and motionless. The pulsing stops, the tracks stop, and the ground
+ *   marks stay lit: the raid keeps all of the information and loses all of the
+ *   noise, which is the moment the ability actually lands in the stomach.
+ * - **It is felt before it is seen.** A rumble that rises with how close it is
+ *   and how fast it is closing, so the gap between abilities is never quiet.
  * - **It gets angry, and it keeps getting angrier.** Each gate shortens its
  *   cooldowns, adds a round to every trigger pull, and makes it faster and
  *   harder-hitting; from Siege on it will simply drive through you. Below 15%
@@ -184,6 +204,17 @@ export class BossController implements AiController {
 
   private lastPhase = 1;
   private boxGoal: CANNON.Vec3 | null = null;
+
+  /** The raider it has fixated on, and until when. */
+  private quarry: Tank | null = null;
+  private markUntil = -1;
+  private markReadyAt = 25;
+  /** Damage dealt by everyone *except* the quarry since the mark was called. */
+  private readonly markBreak = new Map<number, number>();
+  /** Set once the wind-up has gone quiet, so the cue only plays on the edge. */
+  private stillAnnounced = false;
+  /** 0..1 proximity pressure on the player, for the HUD's dread vignette. */
+  private dread = 0;
 
   /** Multiple of its own blast radius it refuses to put a shell inside. */
   private blastClearance = BLAST_CLEARANCE;
@@ -242,6 +273,38 @@ export class BossController implements AiController {
     return clamp(1 - this.telegraph.remaining / this.telegraph.total, 0, 1);
   }
 
+  /** The raider it has fixated on, or null when it is arbitrating normally. */
+  get marked(): Tank | null {
+    return this.quarry;
+  }
+
+  /** Seconds left on the hunt, for the marked raider's countdown. */
+  get markRemaining(): number {
+    return this.quarry ? Math.max(0, this.markUntil - this.deps.arena.time) : 0;
+  }
+
+  /**
+   * How close the squad is to pulling it off its quarry, 0..1. Shown to the
+   * whole raid, because a rescue nobody can see the progress of is a rescue
+   * nobody commits to.
+   */
+  get markBreakProgress(): number {
+    if (!this.quarry) return 0;
+    let total = 0;
+    for (const v of this.markBreak.values()) total += v;
+    return clamp(total / MARK_BREAK_DAMAGE, 0, 1);
+  }
+
+  /** Proximity pressure on the player, 0..1. Atmosphere only — no mechanic. */
+  get dreadLevel(): number {
+    return this.dread;
+  }
+
+  /** True while a called ability has gone quiet and the boss has stopped. */
+  get stilled(): boolean {
+    return !!this.telegraph && this.telegraphProgress >= TELEGRAPH_STILLNESS;
+  }
+
   threatOf(tank: Tank): number {
     return this.threat.get(tank.id) ?? 0;
   }
@@ -269,6 +332,9 @@ export class BossController implements AiController {
       this.perception.update(this.deps.arena, now);
       this.accrueThreat();
       this.decayThreat(TICK);
+      // The mark is resolved before the target is picked, because while one is
+      // running it *is* the target: the threat table is not consulted at all.
+      this.considerMark(now);
       this.target = this.pickTarget();
       this.checkPhase();
       this.learnFromSelfHarm();
@@ -279,6 +345,7 @@ export class BossController implements AiController {
       this.updateGoal();
     }
 
+    this.updatePresence(dt);
     this.updateEnrage(dt);
     this.updateTelegraph(dt);
     this.updateBarrage(dt);
@@ -299,6 +366,10 @@ export class BossController implements AiController {
     this.goal = null;
     this.boxGoal = null;
     this.blastUnsafe = false;
+    this.quarry = null;
+    this.markBreak.clear();
+    this.dread = 0;
+    this.stillAnnounced = false;
   }
 
   /**
@@ -377,7 +448,15 @@ export class BossController implements AiController {
       const seen = this.damageSeen.get(t.id);
       this.damageSeen.set(t.id, t.damageDealt);
       if (seen !== undefined && t.damageDealt > seen) {
-        this.threat.set(t.id, (this.threat.get(t.id) ?? 0) + (t.damageDealt - seen));
+        const fresh = t.damageDealt - seen;
+        this.threat.set(t.id, (this.threat.get(t.id) ?? 0) + fresh);
+        // The rescue, measured on the same tick as the threat it is ignoring.
+        // Only damage from somebody *other* than the quarry counts: a marked
+        // raider shooting their way out of a hunt is exactly the solo answer
+        // this mechanic exists to not have.
+        if (this.quarry && t !== this.quarry) {
+          this.markBreak.set(t.id, (this.markBreak.get(t.id) ?? 0) + fresh);
+        }
       }
 
       // A raider it has just put down stops being the priority. Without this the
@@ -422,7 +501,104 @@ export class BossController implements AiController {
     return score;
   }
 
+  // ---- the mark ---------------------------------------------------------
+
+  /**
+   * The hunt. Once the Overseer is angry enough to stop arbitrating, it picks
+   * the raider at the top of its list and stops caring about the list.
+   *
+   * Everything about this is written to be *legible from the outside*, because
+   * a fixation nobody can see is just a bot behaving oddly. It is announced by
+   * name, it runs on a clock the whole raid can read, and the one thing that
+   * ends it early is the one thing the raid can choose to do — which is why the
+   * break is measured in damage from everybody else rather than in anything the
+   * quarry can influence.
+   */
+  private considerMark(now: number): void {
+    const arena = this.deps.arena;
+
+    if (this.quarry) {
+      if (!this.quarry.alive) {
+        // It caught them. Nothing to announce — the kill feed has just said it
+        // far better than a second line would.
+        this.clearMark(now);
+        return;
+      }
+      // Every raider's contribution counts toward the break; the credit goes to
+      // whoever did the most of it and is still standing to be named.
+      let broken = 0;
+      let breaker: Tank | null = null;
+      let bestShare = 0;
+      for (const [id, amount] of this.markBreak) {
+        broken += amount;
+        if (amount <= bestShare) continue;
+        const who = arena.tanks.find((t) => t.id === id && t.alive);
+        if (!who) continue;
+        bestShare = amount;
+        breaker = who;
+      }
+      if (broken >= MARK_BREAK_DAMAGE) {
+        const saved = this.quarry;
+        this.clearMark(now);
+        // Threat takes over again from here, and the raider who did the pulling
+        // is almost certainly top of it — the rescue is not a special case, it
+        // is the ordinary rule switched back on.
+        arena.notify(
+          breaker
+            ? `${breaker.name} pulled ${this.self.name} off ${saved.name}`
+            : `${this.self.name} lost interest in ${saved.name}`,
+          'info',
+        );
+        return;
+      }
+      if (arena.time >= this.markUntil) {
+        const survived = this.quarry;
+        this.clearMark(now);
+        arena.notify(`${survived.name} outlasted the hunt`, 'info');
+      }
+      return;
+    }
+
+    if (this.deps.phase().index < MARK_FROM_PHASE || now < this.markReadyAt) return;
+
+    // Whoever it is angriest at, provided it can actually account for them —
+    // marking somebody it has never seen would read as the boss cheating.
+    let pick: Tank | null = null;
+    let best = 0;
+    for (const track of this.perception.remembered()) {
+      if (!track.tank.alive) continue;
+      const score = this.threat.get(track.tank.id) ?? 0;
+      if (score > best) {
+        best = score;
+        pick = track.tank;
+      }
+    }
+    if (!pick) return;
+
+    this.quarry = pick;
+    this.markUntil = arena.time + MARK_DURATION;
+    this.markBreak.clear();
+    arena.notify(`${this.self.name} HAS MARKED ${pick.name.toUpperCase()} — GET IT OFF THEM`, 'warning');
+    arena.fx.supplyBurst(this.self.position, 0xf87171, 5);
+    arena.fx.supplyBurst(pick.position, 0xf87171, 4);
+  }
+
+  private clearMark(now: number): void {
+    this.quarry = null;
+    this.markBreak.clear();
+    this.markReadyAt = now + markCooldownFor(this.deps.phase().cooldownScale);
+    // A hunt that just ended leaves it standing somewhere it did not choose, so
+    // the next tick picks fresh ground rather than finishing a stale goal.
+    this.goalTimer = 0;
+  }
+
   private pickTarget(): Tank | null {
+    // A marked raider is the target, full stop. No score, no hysteresis, and no
+    // amount of damage from anyone else moves the gun — that is what the break
+    // threshold is for, and short-circuiting here is what makes the fixation
+    // something a raider can feel rather than infer.
+    if (this.quarry?.alive) return this.quarry;
+
     let best: Tank | null = null;
     let bestScore = -Infinity;
     for (const track of this.perception.remembered()) {
@@ -778,12 +954,29 @@ export class BossController implements AiController {
     const t = this.telegraph;
     if (!t) return;
 
-    // A pulsing ring at the hull, so the wind-up is something you can see from
-    // across the map rather than only something the kill feed mentioned.
-    this.pulseTimer -= dt;
-    if (this.pulseTimer <= 0) {
-      this.pulseTimer = 0.16;
-      this.deps.arena.fx.supplyBurst(this.self.position, 0xff4d4d, 1.6 + this.telegraphProgress * 2.4);
+    // The stillness. Past the threshold everything the boss was doing to
+    // announce itself stops at once — one hard cut rather than a fade, because
+    // a fade is just the noise getting quieter and the whole point is that the
+    // noise *stops*.
+    //
+    // What is left running is the ground marks: the stillness is meant to be
+    // frightening, not to take back the warning the raid was given. You still
+    // know exactly where the rocks are going. You just cannot hear it any more.
+    if (this.stilled) {
+      if (!this.stillAnnounced) {
+        this.stillAnnounced = true;
+        // One last ring, bright and wide, and then nothing. This is the edge a
+        // raid learns to flinch at.
+        this.deps.arena.fx.supplyBurst(this.self.position, 0xffffff, 6);
+      }
+    } else {
+      // A pulsing ring at the hull, so the wind-up is something you can see from
+      // across the map rather than only something the kill feed mentioned.
+      this.pulseTimer -= dt;
+      if (this.pulseTimer <= 0) {
+        this.pulseTimer = 0.16;
+        this.deps.arena.fx.supplyBurst(this.self.position, 0xff4d4d, 1.6 + this.telegraphProgress * 2.4);
+      }
     }
 
     // Ranged ground is marked where it is, not only at the hull. A storm you
@@ -801,6 +994,7 @@ export class BossController implements AiController {
     t.remaining -= dt;
     if (t.remaining > 0) return;
     this.telegraph = null;
+    this.stillAnnounced = false;
     this.execute(t.def, t.points);
   }
 
@@ -1128,6 +1322,12 @@ export class BossController implements AiController {
     for (const id of Object.keys(this.readyAt) as BossAbilityDef['id'][]) {
       this.readyAt[id] = Math.min(this.readyAt[id], arena.time + 2);
     }
+    // And it comes out of the gate looking for somebody. The pressure wave that
+    // has just thrown the raid off its hull, and then — while everyone is still
+    // scattered and picking themselves up — it says a name. That ordering is
+    // the most frightening three seconds the mode has, and it is free: both
+    // halves already existed, they were simply never adjacent.
+    this.markReadyAt = Math.min(this.markReadyAt, arena.time + 3);
     if (phase.enraged) arena.notify(`${this.self.name} IS BERSERK`, 'warning');
   }
 
@@ -1150,6 +1350,45 @@ export class BossController implements AiController {
       this.pulseTimer = 0.5;
       this.deps.arena.fx.supplyBurst(this.self.position, 0xf87171, 2.2 + frenzy * 2);
     }
+  }
+
+  // ---- presence ---------------------------------------------------------
+
+  /**
+   * The dread floor: a rumble through the player's hull that rises as the
+   * Overseer closes and falls away as it leaves.
+   *
+   * This does nothing. It deals no damage, it cannot be countered, and there is
+   * no correct response to it — which is the only reason it works. Every other
+   * cue the boss gives is information the raid is expected to act on, and a
+   * fight made entirely of actionable cues has no atmosphere between them: for
+   * twenty seconds at a time the most frightening thing on the map was a tank
+   * driving around normally.
+   *
+   * Scaled by how fast it is actually moving as well as by range, so the floor
+   * tells you the thing raiders most want to know and are least able to look
+   * up: not just that it is near, but that it is *coming*.
+   */
+  private updatePresence(dt: number): void {
+    const arena = this.deps.arena;
+    const player = arena.tanks.find((t) => t.isPlayer && t.alive);
+    if (!player) {
+      this.dread = 0;
+      return;
+    }
+
+    const gap = this.self.position.distanceTo(player.position);
+    const closeness = clamp(1 - gap / DREAD_RADIUS, 0, 1);
+    // Squared, so the rumble is nothing across the map and unmistakable in the
+    // last few metres rather than a flat hum everywhere inside the radius.
+    const motion = clamp(this.self.vehicle.speed / 12, 0.3, 1);
+    this.dread = closeness * closeness * motion;
+    if (this.dread <= 0.001) return;
+
+    // Fed into the same shake the camera already consumes, and left to that
+    // channel's own decay to reach equilibrium — so it is a sustained floor
+    // under the fight rather than an event competing with the explosions.
+    arena.fx.shake = Math.min(1.6, arena.fx.shake + this.dread * DREAD_SHAKE * dt);
   }
 
   /**
@@ -1193,6 +1432,16 @@ export class BossController implements AiController {
   // ---- positioning ------------------------------------------------------
 
   private updateGoal(): void {
+    // A hunt outranks everything, supply boxes included. The box detour is the
+    // squad's reliable lever for pulling the Overseer off ground it likes, and
+    // while it is fixated that lever is *switched off* — a boss that breaks off
+    // a hunt to go and pick up a repair kit is a boss nobody was afraid of.
+    if (this.quarry?.alive) {
+      const track = this.perception.get(this.quarry.id);
+      this.setGoal(track ? (track.visible ? this.quarry.position.clone() : track.lastKnown.clone()) : this.searchPoint());
+      return;
+    }
+
     // A box it wants outranks everything else it might be doing, including the
     // raider currently shooting it. Breaking the boss's position is what a
     // squad gets out of contesting one.
@@ -1356,7 +1605,13 @@ export class BossController implements AiController {
     let forward = 0;
     let turn = 0;
 
-    if (this.unstickTimer > 0) {
+    if (this.stilled) {
+      // Dead stop. This is the beat the raid gets for free — a stationary
+      // six-tonne target with its gun already committed — and it is the price
+      // the boss pays for the silence being worth anything.
+      forward = 0;
+      turn = 0;
+    } else if (this.unstickTimer > 0) {
       this.unstickTimer -= dt;
       forward = -1;
       turn = this.strafeSign;
@@ -1388,7 +1643,8 @@ export class BossController implements AiController {
       // accelerating as the bar empties. Capped so it stays a tank.
       speedScale: Math.min(
         BOSS_SPEED_CAP,
-        this.self.status.movementScale * bossSpeedScale(this.self.healthFraction),
+        this.self.status.movementScale *
+          (bossSpeedScale(this.self.healthFraction) + (this.quarry ? MARK_SPEED_BONUS : 0)),
       ),
       locked: this.self.weapon.movementLocked,
     });

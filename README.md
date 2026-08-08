@@ -189,6 +189,39 @@ empties — speed, damage and reload all ramp again from 15% down to zero, up to
 name on the boss bar, because a boss that is suddenly outrunning you should be one you can see has
 been given the speed, not one you suspect of cheating.
 
+**It is built to be frightening, not merely difficult.** Everything above makes the Overseer
+dangerous, and danger is a number — it gets read off the HUD, answered with a hull choice, and after
+two raids it is arithmetic. Fear is a different thing, and it is not made of bigger numbers. Three
+mechanics exist purely to supply it, and none of them touches a damage figure:
+
+- **It chooses somebody.** From Siege onward the Overseer periodically stops arbitrating between
+  threat scores and simply marks one raider *by name*. While a hunt is running the threat table is
+  not consulted at all: it drives at its quarry, aims everything at them, ignores the supply box it
+  was about to detour for, and **nothing that raider does moves the gun**. Every other threat in the
+  mode is one you can personally answer; this is the one you cannot. The way out is the rest of the
+  squad putting enough damage into it to drag its head round, which the whole raid watches fill on a
+  rescue bar — so a hunt ends one of three ways, and roughly half of them end with the squad coming
+  back for you. A phase gate re-arms it, which means the pressure wave that throws the raid off the
+  hull is followed, three seconds later, by a name.
+- **It goes quiet before it strikes.** The last stretch of every wind-up is silent and motionless —
+  the pulsing ring stops, the tracks stop, and the ground marks stay lit. The raid keeps all of the
+  information and loses all of the noise. It costs the boss a free shot at a stationary six-tonne
+  target, which is the fairest window in the fight, and it buys the only thing that makes an
+  incoming ability land in the stomach rather than on the health bar: a wind-up that gets steadily
+  louder is one you stop hearing.
+- **It is felt before it is seen.** A rumble through the hull and a bleed at the edges of the screen
+  that rise with how close the Overseer is *and how fast it is closing*, so the twenty seconds
+  between abilities stop looking safe. It does nothing, it cannot be countered, and there is no
+  correct response to it — which is the only reason it works.
+
+**And it feeds.** Since nobody runs out of lives, a death used to cost tempo and nothing else, and a
+death that costs only tempo is a death nobody dreads. Now the Overseer patches itself with whatever
+is left of whoever it just killed, and the bar the entire raid is watching goes *up*. The heal is
+deliberately small — under half a percent — and it is clamped to the phase ceiling like every other
+heal in the game, so it is something you watch happen rather than something that beats you. The
+first draft was five times larger and the harness caught it immediately: the bar welded itself to
+the phase ceiling and the raid stopped making progress inside a phase at all.
+
 **Reinforcements are unlimited.** Nobody is ever benched — the squad always comes back. What a death
 costs is *time*: the wait climbs from four seconds toward twelve as the raid takes losses, and every
 one of those seconds is a second the Overseer spends repairing. The old shared ticket pool failed in

@@ -66,6 +66,12 @@ try {
     let samples = 0;
     let inRearArc = 0;
     let aggroOnPlayer = 0;
+    let dreadPeak = 0;
+    const mark = {
+      current: null, quarryAlive: true, lastBreak: 0, lastRemaining: 0,
+      called: 0, onPlayer: 0, broken: 0, caught: 0, outlasted: 0, samples: 0,
+      peak: 0, peakSum: 0, ended: 0,
+    };
 
     for (let i = 0; i < 60 * seconds; i++) {
       // Stand-in for a competent player: slew the turret onto the boss, hold the
@@ -103,6 +109,41 @@ try {
         if (snap.boss) {
           seen.phases.add(snap.boss.phase);
           if (snap.boss.targetingPlayer) aggroOnPlayer += 1;
+
+          // The hunt, sampled on transitions. A mark that never fires, never
+          // ends, or only ever ends one way is the failure mode worth catching
+          // — the mechanic is meant to have three exits and be survivable by
+          // all of them, and none of that is visible from the health bar.
+          const marked = snap.boss.markedName;
+          if (marked && !mark.current) {
+            mark.called += 1;
+            if (snap.boss.markedPlayer) mark.onPlayer += 1;
+          } else if (!marked && mark.current) {
+            // Attribute the ending by the clock rather than by the rescue bar.
+            // The tick that pushes the bar over the threshold also clears the
+            // mark, so a successful rescue is never *observed* at 100% — read
+            // that way, every break in the fight was miscounted as a timeout.
+            // Time left on a live quarry is the unambiguous signal.
+            if (!mark.quarryAlive) mark.caught += 1;
+            else if (mark.lastRemaining > 0.3) mark.broken += 1;
+            else mark.outlasted += 1;
+          }
+          if (marked) {
+            const who = battle.tanks.find((t) => t.name === marked);
+            mark.quarryAlive = !!who?.alive;
+            mark.lastBreak = snap.boss.markBreak;
+            mark.lastRemaining = snap.boss.markRemaining;
+            mark.peak = Math.max(mark.peak, snap.boss.markBreak);
+            mark.samples += 1;
+          } else if (mark.current) {
+            // Bank how far the rescue actually got, so a threshold that is
+            // never reached can be re-sized against real numbers rather than
+            // against an estimate of what a squad "should" manage.
+            mark.peakSum += mark.lastBreak;
+            mark.ended += 1;
+          }
+          mark.current = marked;
+          dreadPeak = Math.max(dreadPeak, snap.boss.dread);
         }
         if (snap.over) { seen.notes.push(`over at ${(i / 60).toFixed(0)}s: ${snap.winner} — ${snap.reason}`); break; }
         // A destroyed tank is parked far below the arena, so sampling its
@@ -144,6 +185,17 @@ try {
       hudLine: snap.modeLine,
       playerInRearArcPct: samples ? Math.round((inRearArc / samples) * 100) : 0,
       aggroOnPlayerPct: samples ? Math.round((aggroOnPlayer / samples) * 100) : 0,
+      marksCalled: mark.called,
+      marksOnPlayer: mark.onPlayer,
+      markEndedBroken: mark.broken,
+      markEndedCaught: mark.caught,
+      markEndedOutlasted: mark.outlasted,
+      /** Share of the fight somebody was being hunted. Ambient is a failure. */
+      markedPct: samples ? Math.round((mark.samples / samples) * 100) : 0,
+      dreadPeak: Number(dreadPeak.toFixed(2)),
+      /** Best and mean rescue progress reached, 0..1 — how close help ever got. */
+      markBreakBest: Number(mark.peak.toFixed(2)),
+      markBreakMean: mark.ended ? Number((mark.peakSum / mark.ended).toFixed(2)) : 0,
       over: snap.over,
       notes: seen.notes,
       scoreboard: snap.scoreboard.map((t) => ({

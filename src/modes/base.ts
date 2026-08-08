@@ -57,6 +57,23 @@ export interface BossStatus {
   /** Ability currently winding up, and how far through the wind-up it is. */
   telegraph: string | null;
   telegraphProgress: number;
+  /**
+   * The hunt. `markedName` is whoever the boss has fixated on, null when it is
+   * arbitrating normally; `markedPlayer` is the case the HUD shouts about.
+   *
+   * `markBreak` is the raid's progress at pulling it off, 0..1, and it is shown
+   * to everybody rather than only to the quarry — a rescue nobody can see the
+   * progress of is a rescue nobody commits to.
+   */
+  markedName: string | null;
+  markedPlayer: boolean;
+  markRemaining: number;
+  markBreak: number;
+  /**
+   * Proximity pressure, 0..1. Atmosphere with no mechanic behind it: how close
+   * the Overseer is and how fast it is closing, for the screen edges to bleed.
+   */
+  dread: number;
 }
 
 export interface ModeController {

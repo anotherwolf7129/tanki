@@ -467,6 +467,158 @@ export const BARRAGE_SPREAD = 6;
 export const OVERCHARGE_DURATION = 9;
 
 /**
+ * ---- The fear layer ---------------------------------------------------
+ *
+ * Everything above this line makes the Overseer *dangerous*. Danger is a
+ * number: it is read off the HUD, solved with a hull choice, and after two
+ * raids it is arithmetic. Fear is a different thing and it is not made of
+ * bigger numbers — a boss nobody is frightened of does not get less frightening
+ * when its damage goes up, it just gets more annoying.
+ *
+ * Fear is made of three things this fight did not have, and the constants below
+ * are those three things:
+ *
+ *  - **Presence.** Something between the abilities. The Overseer used to be a
+ *    normal tank fight punctuated by scheduled events; now it is felt through
+ *    the floor for as long as it is near, and the pressure has a gradient you
+ *    can hear closing behind you.
+ *  - **Attention.** Being *chosen*, by name, and knowing that nothing you
+ *    personally do will change its mind. The aggro meter is a slider you
+ *    manage; the mark is a decision that has already been taken about you.
+ *  - **Contrast.** Stillness before violence. The wind-up used to get louder
+ *    all the way to the strike, which is the one shape that cannot frighten
+ *    anybody: a noise that rises predictably is a noise you stop hearing.
+ */
+
+/**
+ * The Mark — the piece that turns aggro into a hunt.
+ *
+ * From Siege onward the Overseer periodically stops arbitrating between four
+ * threat scores and simply *picks somebody*. While a raider is marked the
+ * threat table is not consulted at all: it drives at them, aims everything at
+ * them, and will not be distracted by the squadmate hammering its engine deck.
+ *
+ * This is deliberately the one mechanic in the mode a raider cannot solve
+ * alone, and that is the entire point of it. Every other threat in this file is
+ * something you personally can answer — move out of the ring, bring a heavy
+ * hull, stop out-damaging the squad. The mark is answered by the *squad*: it
+ * breaks when somebody else does enough damage to drag its head round. Being
+ * hunted by something you cannot shake, while you wait to find out whether your
+ * team is going to come and get it off you, is a feeling no amount of extra
+ * shell damage buys.
+ *
+ * Which is also why it must never be a death sentence. There are three ways out
+ * — the squad breaks it, you survive the clock, or it catches you — and a raid
+ * that knows all three is a raid that is frightened rather than cheated.
+ */
+export const MARK_FROM_PHASE = 2;
+/**
+ * Seconds between hunts. Long, and deliberately *not* scaled flat by the
+ * phase's cooldown multiplier the way its abilities are.
+ *
+ * At the full ability scale a Wrath-phase Overseer would be hunting somebody
+ * for more than half of every minute, and a fixation that is running most of
+ * the time is not a fixation — it is just how the boss targets, and the whole
+ * effect dies. The blunted curve below keeps the hunt at roughly a quarter of
+ * the fight at every phase: more often when it is angry, never ambient.
+ */
+export const MARK_COOLDOWN = 34;
+export function markCooldownFor(cooldownScale: number): number {
+  return MARK_COOLDOWN * (0.6 + 0.4 * cooldownScale);
+}
+/** How long it stays fixated if nothing breaks it. */
+export const MARK_DURATION = 9;
+/**
+ * Damage from *anyone but the quarry* that pulls its head round.
+ *
+ * Sized so that one squadmate deciding to be a hero is not enough and the squad
+ * turning together is, because the interesting version of this mechanic is the
+ * one where the rescue has to be chosen. That intent was originally written as
+ * 2400 and it was simply wrong: the harness called thirty-one hunts across
+ * three fights and the squad broke exactly none of them, because a raid puts
+ * roughly five hundred points into the boss over a nine-second window and no
+ * amount of commitment doubles that four times over.
+ *
+ * A threshold nobody ever reaches is not a hard mechanic, it is an absent one —
+ * and worse than absent here, because the promise the HUD makes to the marked
+ * raider is that help is possible.
+ *
+ * So this one is measured, not reasoned — and measuring it needed the harness
+ * fixed first, because the obvious way to count a rescue is wrong: the tick
+ * that pushes the bar past this number also clears the mark, so a successful
+ * break is never *observed* at a full bar and every one of them was being filed
+ * as a timeout. Read that way the mechanic looked dead at every threshold.
+ *
+ * Counted properly, against time left on a living quarry, this lands where it
+ * should. Roughly half of all hunts end in a rescue, a little under half run
+ * their course, and the rest end with the Overseer catching somebody — three
+ * live outcomes rather than one. Lower and passive chip damage alone pulls it
+ * off, which costs the hunt its teeth; higher and the squad cannot answer at
+ * all, which costs it its point.
+ */
+export const MARK_BREAK_DAMAGE = 1200;
+/**
+ * A hunt is faster than a fight. Small — the fear is the fixation, not the
+ * speed, and the escalation slope already owns that stat.
+ */
+export const MARK_SPEED_BONUS = 0.15;
+
+/**
+ * The Stillness.
+ *
+ * The last stretch of every wind-up, in which the Overseer stops. The pulsing
+ * ring stops, the tracks stop, and for a beat the loudest thing on the field is
+ * doing nothing at all.
+ *
+ * It costs the boss something real — that beat is a free shot at a stationary
+ * six-tonne target, and it is the fairest window in the fight — and it buys the
+ * only thing that makes an incoming ability land in the stomach rather than on
+ * the health bar. A raid learns to read it within one fight and never stops
+ * flinching at it, which is the exact difference between a tell and a threat.
+ */
+export const TELEGRAPH_STILLNESS = 0.72;
+
+/**
+ * It feeds.
+ *
+ * Nobody runs out of lives, so dying costs tempo and nothing else — and a death
+ * that costs only tempo is a death nobody is afraid of. This is the stake the
+ * mode was missing: the Overseer patches itself with what is left of whoever it
+ * just killed, and the bar the whole raid is watching goes *up*.
+ *
+ * Clamped to the phase ceiling like every other heal it has, so a squad that is
+ * wiping repeatedly loses tempo and morale but can never be pushed back through
+ * a gate it has already bought. Progress stays permanent; only the mood gets
+ * worse.
+ *
+ * The number is small because it was measured rather than picked, and the first
+ * pick was five times this. The harness found the failure mode immediately: a
+ * struggling raid takes upward of thirty deaths in a fight, and at 2% a pop
+ * that is three quarters of the boss's pool handed back. The bar simply welded
+ * itself to the phase ceiling and the raid made no progress inside a phase at
+ * all — the exact "beaten by an accountant" outcome the ticket pool was deleted
+ * for. Under half a percent it does what it is for: you see it happen, you feel
+ * it, and it never becomes the reason the raid failed.
+ */
+export const KILL_HEAL_FRACTION = 0.005;
+
+/**
+ * Presence — the dread floor.
+ *
+ * A rumble through the hull that rises as the Overseer closes, scaled by how
+ * fast it is actually moving. No damage, no mechanic, nothing to counter: it
+ * exists so that the twenty seconds between abilities stop being a normal tank
+ * fight, and so that a raider who has lost track of it finds out through the
+ * floor rather than by turning round.
+ *
+ * The radius is deliberately longer than its gun is comfortable at, so the
+ * rumble arrives before the shell does.
+ */
+export const DREAD_RADIUS = 52;
+/** Peak shake contributed per second at zero range and full speed. */
+export const DREAD_SHAKE = 0.5;
+
+/**
  * Purge, the Juggernaut's ultimate, vents the reactor: it throws the raid off
  * the hull and patches the boss on the way. The heal is small against a pool
  * this size and clamped to the phase gate like every other heal it has, so it
