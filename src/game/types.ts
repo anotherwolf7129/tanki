@@ -48,7 +48,13 @@ export interface ProjectileSpawn {
 
 export interface Notification {
   text: string;
-  kind: 'info' | 'kill' | 'objective' | 'warning' | 'gold';
+  /**
+   * `squad` is radio traffic from your own side. It gets its own colour
+   * because it shares the feed with the boss's warnings, and a raid that
+   * cannot tell "it is calling down a storm" from "moving, ring on me" at a
+   * glance has a feed that is worse than an empty one.
+   */
+  kind: 'info' | 'kill' | 'objective' | 'warning' | 'gold' | 'squad';
   at: number;
 }
 

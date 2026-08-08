@@ -74,6 +74,14 @@ export interface BossStatus {
    * the Overseer is and how fast it is closing, for the screen edges to bleed.
    */
   dread: number;
+  /**
+   * Share of the map's cover the Overseer has destroyed, 0..1, and how many
+   * structures that is. Printed because the attrition is otherwise something
+   * you only notice by dying in the open: a raid should be able to see that the
+   * room it is fighting in is a third smaller than the one it started in.
+   */
+  coverLost: number;
+  structuresDown: number;
 }
 
 export interface ModeController {
@@ -101,6 +109,12 @@ export interface ModeController {
   respawnDelay(tank: Tank, arena: Arena): number | null;
   /** Boss-fight state for the HUD, or null in every other mode. */
   bossStatus(arena: Arena): BossStatus | null;
+  /**
+   * A blast landing on the world, routed through the battle's one splash
+   * funnel. Boss Raid uses it to take the map apart; every other mode leaves it
+   * undefined and pays nothing for it.
+   */
+  onBlast?(centre: CANNON.Vec3, radius: number, power: number, source: Tank | null): void;
   dispose(): void;
 }
 

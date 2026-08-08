@@ -200,8 +200,8 @@ mechanics exist purely to supply it, and none of them touches a damage figure:
   was about to detour for, and **nothing that raider does moves the gun**. Every other threat in the
   mode is one you can personally answer; this is the one you cannot. The way out is the rest of the
   squad putting enough damage into it to drag its head round, which the whole raid watches fill on a
-  rescue bar — so a hunt ends one of three ways, and roughly half of them end with the squad coming
-  back for you. A phase gate re-arms it, which means the pressure wave that throws the raid off the
+  rescue bar — so a hunt ends one of three ways, and about six in ten end with the squad coming
+  back for you, now that the squad can actually decide to. A phase gate re-arms it, which means the pressure wave that throws the raid off the
   hull is followed, three seconds later, by a name.
 - **It goes quiet before it strikes.** The last stretch of every wind-up is silent and motionless —
   the pulsing ring stops, the tracks stop, and the ground marks stay lit. The raid keeps all of the
@@ -221,6 +221,55 @@ deliberately small — under half a percent — and it is clamped to the phase c
 heal in the game, so it is something you watch happen rather than something that beats you. The
 first draft was five times larger and the harness caught it immediately: the bar welded itself to
 the phase ceiling and the raid stopped making progress inside a phase at all.
+
+**And it takes the room apart** (`src/game/demolition.ts`). Every other escalation in the mode
+happens to the Overseer — it gets faster, it hits harder, it fans more shells out of the barrel, all
+of which a raid answers by playing better. This one happens to the *arena*, it is subtractive, and it
+is permanent: the wall you held the first phase behind is not there in the third.
+
+Its ordnance carries integrity damage into whatever it lands near, sized off the prop's own volume
+and material, so a glass box goes early and a concrete block takes a storm. What happens next depends
+on the shape of the thing. A tall one **topples** — a second of visible lean, announced, with the
+ground it is about to land across published to the raid, and anything still under it is crushed. A
+wide one **sits down**. Either way what is left is a rubble field 1.1 m high: still something you
+bump over, never again something you hide behind, because rubble that restored cover would make the
+whole system cosmetic. And an elevated deck does not leave rubble at all — it falls away, which is
+the one genuine hole the boss can make, and whoever was shooting off the top of it discovers that the
+floor was a target.
+
+Three exemptions keep it a mechanic rather than a way to break the map: the perimeter, the ramps that
+connect the map to itself, and anything with a footprint big enough to be *terrain* rather than
+cover. That last one is not a nicety — maps are authored from the same 5 m prop kit as the buildings,
+so the thing holding up half of Kungur is structurally a 200 × 40 m wall, and the first version of
+this was perfectly happy to level it and take the spawns with it.
+
+**Only the Overseer does this.** Your Thunder shell leaves the wall standing. Cover is the raid's
+resource and the boss is the only thing that can spend it, so "there is less to hide behind than
+there was" is always a sentence about what the boss has done to you. The HUD prints it as
+`COVER −n%` next to the loss count, because otherwise it is a loss you only notice by dying in the
+open. Craters are the honest half: the arena floor is one collider, so a crater is a scorched,
+churned, permanently-marked patch of ground that costs the squad's pathing to cross — not a pit you
+fall into.
+
+**And the squad can finally see any of it** (`src/ai/squad.ts`). Until now the raid's bots did not
+know a boss fight was happening: they stood in Quake rings, drove through storms, and — the damning
+one — could not *choose* to break a hunt, so the rescue bar filled from chip damage or it did not
+fill at all. The one mechanic in the mode written to be answered by the squad was the one mechanic
+the squad had no way to answer.
+
+So the Overseer now publishes ground it has committed to hitting — the Quake ring, each rock's
+impact, the barrage's aim, a building's fall line — to a shared channel, and two branches sit at the
+top of the raid squad's behaviour tree: **clear the ring**, above self-preservation because the
+ground resolving in one second beats the health you have left, and **break the mark**, which turns
+four guns round onto the boss when it fixates on somebody. Nothing on that channel is knowledge you
+do not have; every zone on it already has a ring drawn on the floor or a warning in the feed. The
+squad is not being told things — it is being allowed to read its own HUD.
+
+The radio is how that becomes legible, and every line is something the speaker is *about to do*:
+`Coldiron: breaking it off you — hit the deck with me` means four guns are already turning. It is
+rate-limited twice over, globally and per topic, and there is deliberately no line for dying —
+the kill feed already prints every loss, and measured, that one topic was most of the channel's
+traffic. Squad traffic is green in the feed so it never competes with the Overseer's own warnings.
 
 **Reinforcements are unlimited.** Nobody is ever benched — the squad always comes back. What a death
 costs is *time*: the wait climbs from four seconds toward twelve as the raid takes losses, and every
@@ -243,12 +292,15 @@ and a different difficulty profile feeding their stats.
 - **Perception** (`src/ai/perception.ts`) — bots never read world state directly. Everything arrives
   through a sensor with a field of view, a view distance, a reaction delay, and a memory duration.
   Difficulty is tuned here rather than by nerfing aim after the fact.
-- **Behaviour tree** (`src/ai/bot.ts`) ticked at 10 Hz over a blackboard: survive → mode objective →
-  contest pickup → engage → patrol. Steering, aiming and trigger discipline run every frame.
+- **Behaviour tree** (`src/ai/bot.ts`) ticked at 10 Hz over a blackboard: clear the danger zone →
+  break the mark → survive → mode objective → contest pickup → engage → patrol. Steering, aiming and
+  trigger discipline run every frame. The first two branches read the raid's squad channel and are
+  inert in every other mode, where nothing supplies one.
 - **Navigation** (`src/ai/navgrid.ts`) — the navgrid is sampled straight out of the physics world,
   one downward ray per 3 m cell. Neighbours connect only when the step between them is small enough
   for a tank to climb, which handles ramps, bridges and raised platforms without authoring a separate
-  navmesh, and stays correct when map props change.
+  navmesh, and stays correct when map props change — including when a boss changes them mid-battle,
+  since a demolished building re-samples the patch it stood on rather than invalidating the grid.
 - **Aim model** — error shrinks the longer a bot holds a target and resets when line of sight breaks.
   That single mechanic does most of the work of making bots feel intelligent, and it is what rewards
   the player for breaking contact.
@@ -256,7 +308,10 @@ and a different difficulty profile feeding their stats.
   with its own loadout, aggression, standoff distance and reaction scaling. A roster is mixed so a
   team never reads as eight copies of one bot.
 - **Team blackboard** — deliberately shallow: target calls and a claim system so two bots don't race
-  for the same box.
+  for the same box. Emergent coordination reads better than scripted squad play, and in a line battle
+  that is all it needs to do. The **squad channel** (`src/ai/squad.ts`) is the boss fight's exception,
+  because everything dangerous in a raid is a shared problem on a timer that no bot can discover by
+  looking at its own perception.
 
 ## Making the player advantaged
 
@@ -315,10 +370,10 @@ src/
   physics/   cannon-es world, collision layers, vehicle controller
   entities/  tank, weapon, projectile, pickup, status
   data/      turrets.json, hulls.json, maps/, supplies, modes, difficulty, raid
-  ai/        navgrid, perception, behaviour tree, personas, team board, boss
+  ai/        navgrid, perception, behaviour tree, personas, team board, boss, squad channel
   render/    scene, procedural textures, materials, tank meshes, effects, camera, HUD
   modes/     dm, tdm, ctf, cp, boss raid
-  game/      battle orchestration, overdrives
+  game/      battle orchestration, overdrives, arena demolition
   ui/        garage and battle setup
 tools/
   validate-maps.mjs
@@ -351,12 +406,17 @@ node tools/raid-smoke.mjs silence  # a different map
 builds, serves, starts a raid in a real browser and fast-forwards the simulation far faster than
 real time, driving a stand-in player, then reports how long the fight lasted, how many losses the
 squad took and what a death costs by the end, which abilities actually fired, what the boss had left
-in its supply rack, how far it travelled, and how much of the time the player was in its rear arc.
-The stand-in cannot aim, so read its runs as "what the bot squad alone manages" — the human share of
-the damage is the whole premise of the mode and the harness does not model it. Run it several times — bot pathing makes single runs
-noisy, and it is the spread that tells you whether the mode is tuned. It is what caught the two
-balance bugs that mattered: a repair rate that scaled off the boss's own pool and so out-healed the
-entire squad, and squadmates whose guns could not reach the range the boss holds.
+in its supply rack, how far it travelled, how much of the time the player was in its rear arc, how
+much of the map's cover was still standing at the end, and how much the squad said. The stand-in
+cannot aim, so read its runs as "what the bot squad alone manages" — the human share of the damage is
+the whole premise of the mode and the harness does not model it. Run it several times — bot pathing
+makes single runs noisy, and it is the spread that tells you whether the mode is tuned.
+
+It is what caught the balance bugs that mattered: a repair rate that scaled off the boss's own pool
+and so out-healed the entire squad, squadmates whose guns could not reach the range the boss holds,
+a rescue threshold nobody ever reached, structural integrity so high that four hundred simulated
+seconds brought down between zero and two buildings, and a squad radio that was saying something
+every six seconds — most of it announcing deaths the kill feed had already printed.
 
 ## Balance figures
 

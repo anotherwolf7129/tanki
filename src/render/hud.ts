@@ -291,7 +291,16 @@ export class Hud {
     // raid is now paying for a death.
     ctx.textAlign = 'right';
     ctx.fillStyle = boss.respawnDelay >= 10 ? '#fbbf24' : '#9aa4b2';
-    ctx.fillText(`${boss.losses} LOSSES · RESPAWN ${boss.respawnDelay.toFixed(1)}s`, x + width, y - 10);
+    // And the other price: how much of the room it has taken away. Cover is a
+    // resource the raid spends without ever deciding to, so it is the one loss
+    // in the fight nobody notices until they are standing in the open — which
+    // is exactly why it gets a number rather than being left to be discovered.
+    const cover = boss.coverLost > 0.005 ? ` · COVER −${Math.round(boss.coverLost * 100)}%` : '';
+    ctx.fillText(
+      `${boss.losses} LOSSES · RESPAWN ${boss.respawnDelay.toFixed(1)}s${cover}`,
+      x + width,
+      y - 10,
+    );
 
     ctx.fillStyle = 'rgba(255,255,255,0.1)';
     roundRect(ctx, x, y, width, 18, 4);
@@ -733,13 +742,15 @@ export class Hud {
       ctx.fillStyle =
         n.kind === 'gold'
           ? '#ffd700'
-          : n.kind === 'objective'
-            ? '#7dd3fc'
-            : n.kind === 'warning'
-              ? '#f87171'
-              : n.kind === 'kill'
-                ? '#e6edf5'
-                : '#9aa4b2';
+          : n.kind === 'squad'
+            ? '#86efac'
+            : n.kind === 'objective'
+              ? '#7dd3fc'
+              : n.kind === 'warning'
+                ? '#f87171'
+                : n.kind === 'kill'
+                  ? '#e6edf5'
+                  : '#9aa4b2';
       ctx.fillText(n.text, 28, y);
       y += 20;
     }

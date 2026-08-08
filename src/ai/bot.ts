@@ -11,7 +11,9 @@ import type { AiController } from './controller';
 import { NavGrid } from './navgrid';
 import { Perception, type Track } from './perception';
 import type { Persona } from './personas';
+import { SquadChannel, SQUAD_LINES, type DangerZone, type Escape } from './squad';
 import type { TeamBoard } from './teamboard';
+import { EVACUATE_GIVE_UP, EVACUATE_MARGIN, RESCUE_REACH } from '../data/raid';
 
 const TICK = 0.1;
 
@@ -26,9 +28,14 @@ export interface BotDeps {
   nearestPickup: (from: CANNON.Vec3) => { pos: CANNON.Vec3; value: number } | null;
   /** Mode-supplied goal, e.g. the enemy flag or the weakest control point. */
   objective: (bot: Tank) => { pos: CANNON.Vec3; kind: 'attack' | 'defend'; weight: number } | null;
+  /**
+   * Boss Raid only. Shared danger zones and the squad radio — absent in every
+   * other mode, where the two branches that read it simply never fire.
+   */
+  squad?: SquadChannel;
 }
 
-type Intent = 'engage' | 'retreat' | 'objective' | 'pickup' | 'patrol' | 'escort';
+type Intent = 'engage' | 'retreat' | 'objective' | 'pickup' | 'patrol' | 'escort' | 'evade' | 'rescue';
 
 /**
  * One bot. Decisions run on a 10 Hz behaviour tree over a blackboard; steering,
@@ -63,6 +70,8 @@ export class BotController implements AiController {
   private chargeTimer = 0;
   private readonly reactionDelay: number;
   private lastPathAt = -99;
+  /** Where the bot is running to get out of a marked blast zone, if anywhere. */
+  private evadeTo: Escape | null = null;
 
   constructor(
     readonly self: Tank,
@@ -103,6 +112,7 @@ export class BotController implements AiController {
     this.target = null;
     this.path = [];
     this.goal = null;
+    this.evadeTo = null;
     this.intent = 'patrol';
   }
 
@@ -385,6 +395,13 @@ export class BotController implements AiController {
   }
 
   private computeSteering(): { forward: number; turn: number } {
+    // Getting out of a ring is a straight-line sprint, not a navigation
+    // problem: a bot that stops to path around a corner while a Quake winds up
+    // has spent the whole warning on the search. Whisker avoidance below keeps
+    // it off walls, which is all the steering a one-second dash needs.
+    if (this.intent === 'evade' && this.evadeTo) {
+      return this.avoid(this.driveTo(this.evadeTo.x, this.evadeTo.z));
+    }
     // In an engagement, orbit the target inside the weapon's band instead of
     // driving the path blindly.
     const track = this.currentTrack();
@@ -392,6 +409,69 @@ export class BotController implements AiController {
       return this.avoid(this.combatSteering(track));
     }
     return this.avoid(this.followPath());
+  }
+
+  /** Point the hull at a world point and drive, slowing for hard turns. */
+  private driveTo(x: number, z: number): { forward: number; turn: number } {
+    const desired = Math.atan2(x - this.self.position.x, z - this.self.position.z);
+    const delta = angleDelta(this.self.vehicle.yaw, desired);
+    const turn = clamp(delta * 2.4, -1, 1);
+    // Past a right angle it reverses out rather than swinging the hull round,
+    // which is both faster and what a driver would do.
+    const forward = Math.abs(delta) > 2.1 ? -1 : Math.abs(delta) > 1.1 ? 0.45 : 1;
+    return { forward, turn };
+  }
+
+  // ---- the squad channel ------------------------------------------------
+
+  /**
+   * Ground the bot is standing on and should not be. Returns the zone only
+   * while running still helps: a wind-up with a third of a second left is one
+   * the bot is better off shooting through than being caught mid-turn by.
+   */
+  dangerHere(): DangerZone | null {
+    const squad = this.deps.squad;
+    if (!squad) return null;
+    const zone = squad.threatAt(this.self.position, EVACUATE_MARGIN);
+    if (!zone) return null;
+    return zone.until - this.deps.arena.time > EVACUATE_GIVE_UP ? zone : null;
+  }
+
+  evacuate(): void {
+    const squad = this.deps.squad;
+    const zone = this.dangerHere();
+    if (!squad || !zone) return;
+    this.intent = 'evade';
+    this.evadeTo = squad.escapeFrom(this.self.position, zone, EVACUATE_MARGIN);
+    this.setGoal(null);
+    // Keep shooting on the way out if the turret already has something. Running
+    // is the priority; going quiet as well is a squad that contributes nothing
+    // for a quarter of every fight.
+    this.target = this.selectTarget();
+    squad.say(this.self, 'evacuate', SquadChannel.line([...SQUAD_LINES.evacuate], this.self.id));
+  }
+
+  /**
+   * The ally the boss has fixated on, if this bot is close enough to be part of
+   * the answer. The rescue is damage, not proximity — but a squadmate that
+   * abandons a position on the far side of the map contributes nothing except a
+   * long drive, so the commitment has a range on it.
+   */
+  rescueBoss(): Tank | null {
+    const squad = this.deps.squad;
+    const quarry = squad?.rescue;
+    const boss = squad?.boss;
+    if (!squad || !quarry || !boss || !boss.alive) return null;
+    if (quarry === this.self || !quarry.alive) return null;
+    return boss.position.distanceTo(this.self.position) <= RESCUE_REACH ? boss : null;
+  }
+
+  callRescue(): void {
+    const squad = this.deps.squad;
+    const quarry = squad?.rescue;
+    if (!squad || !quarry) return;
+    const line = SquadChannel.line([...SQUAD_LINES.rescue], this.self.id);
+    squad.say(this.self, 'rescue', quarry.isPlayer ? line : `${line} — ${quarry.name}`);
   }
 
   /**
@@ -611,6 +691,34 @@ function ballisticElevation(horizontal: number, height: number, speed: number, g
  * then contest pickups, then engage, then wander.
  */
 function buildTree(): Node<BotController> {
+  // Above survival, because the ground you are standing on resolving in one
+  // second beats the health you have left. This branch and the rescue below it
+  // are the only two that read the squad channel, and both are inert in every
+  // mode that does not supply one.
+  const evacuate = guard<BotController>(
+    'Evacuate',
+    (bb) => bb.dangerHere() !== null,
+    action('GetOut', (bb) => {
+      bb.evacuate();
+      return 'running';
+    }),
+  );
+
+  const rescue = guard<BotController>(
+    'Rescue',
+    (bb) => bb.rescueBoss() !== null,
+    action('BreakTheMark', (bb) => {
+      const boss = bb.rescueBoss()!;
+      bb.intent = 'rescue';
+      // The mark is broken by damage, so this is not "go and stand near your
+      // squadmate" — it is "put your gun on the thing that is hunting them".
+      bb.target = boss;
+      bb.setGoal(boss.position);
+      bb.callRescue();
+      return 'running';
+    }),
+  );
+
   const survive = guard<BotController>(
     'Survive',
     (bb) =>
@@ -703,5 +811,5 @@ function buildTree(): Node<BotController> {
     return 'running';
   });
 
-  return selector('Root', [survive, objective, contestPickup, engageBranch, patrol]);
+  return selector('Root', [evacuate, rescue, survive, objective, contestPickup, engageBranch, patrol]);
 }

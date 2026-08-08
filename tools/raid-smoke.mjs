@@ -67,6 +67,8 @@ try {
     let inRearArc = 0;
     let aggroOnPlayer = 0;
     let dreadPeak = 0;
+    let coverLost = 0;
+    let structuresDown = 0;
     const mark = {
       current: null, quarryAlive: true, lastBreak: 0, lastRemaining: 0,
       called: 0, onPlayer: 0, broken: 0, caught: 0, outlasted: 0, samples: 0,
@@ -144,6 +146,12 @@ try {
           }
           mark.current = marked;
           dreadPeak = Math.max(dreadPeak, snap.boss.dread);
+          // The arena itself, which is the one pressure in the mode that only
+          // ever goes one way — if a run ends with the cover untouched the
+          // demolition is decorative, and if it ends near total the raid spent
+          // the last phase in a car park.
+          coverLost = Math.max(coverLost, snap.boss.coverLost);
+          structuresDown = Math.max(structuresDown, snap.boss.structuresDown);
         }
         if (snap.over) { seen.notes.push(`over at ${(i / 60).toFixed(0)}s: ${snap.winner} — ${snap.reason}`); break; }
         // A destroyed tank is parked far below the arena, so sampling its
@@ -193,6 +201,11 @@ try {
       /** Share of the fight somebody was being hunted. Ambient is a failure. */
       markedPct: samples ? Math.round((mark.samples / samples) * 100) : 0,
       dreadPeak: Number(dreadPeak.toFixed(2)),
+      /** Share of the map's cover the Overseer destroyed, and how many props. */
+      coverLostPct: Math.round(coverLost * 100),
+      structuresDown,
+      /** Radio calls the squad made. Silence is a bug; a wall of text is worse. */
+      squadCalls: battle.squadCalls?.() ?? 0,
       /** Best and mean rescue progress reached, 0..1 — how close help ever got. */
       markBreakBest: Number(mark.peak.toFixed(2)),
       markBreakMean: mark.ended ? Number((mark.peakSum / mark.ended).toFixed(2)) : 0,

@@ -231,6 +231,13 @@ export interface PropDef {
   /** Yaw in degrees. */
   rot?: number;
   material?: 'concrete' | 'metal' | 'sand' | 'glass' | 'hazard';
+  /**
+   * Load-bearing on the arena itself rather than on the fight: the perimeter,
+   * and anything else that must survive whatever is thrown at it. Boss Raid
+   * demolition skips these, because an arena whose walls can be knocked flat is
+   * an arena tanks drive out of.
+   */
+  structural?: boolean;
 }
 
 export interface SpawnDef {

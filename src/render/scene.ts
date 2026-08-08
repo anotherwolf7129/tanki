@@ -6,6 +6,8 @@ import { groundMaterial, hazeColour, propMaterial, skyMaterialTexture } from './
 export interface SceneBundle {
   scene: THREE.Scene;
   sun: THREE.DirectionalLight;
+  /** One mesh per entry in `MapDef.props`, in the same order as the colliders. */
+  props: THREE.Mesh[];
   dispose(): void;
 }
 
@@ -79,14 +81,17 @@ export function createScene(def: MapDef): SceneBundle {
   owned.push(grid.geometry, grid.material as THREE.Material);
   scene.add(grid);
 
+  const props: THREE.Mesh[] = [];
   for (const p of def.props) {
     const mesh = buildProp(p, owned);
     scene.add(mesh);
+    props.push(mesh);
   }
 
   return {
     scene,
     sun,
+    props,
     dispose() {
       for (const o of owned) o.dispose();
       scene.clear();

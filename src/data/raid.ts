@@ -619,6 +619,188 @@ export const DREAD_RADIUS = 52;
 export const DREAD_SHAKE = 0.5;
 
 /**
+ * ---- Demolition -------------------------------------------------------
+ *
+ * The arena as a resource the Overseer can spend.
+ *
+ * Every other escalation in this file happens to the boss: it moves faster, it
+ * hits harder, it puts more shells in the air. Those are all things a raid
+ * answers by playing better. This one is subtractive and permanent — the wall
+ * the raid held the first phase behind is not there in the third — and it is
+ * the only pressure in the mode that a raid cannot answer by improving, only by
+ * moving. A boss that gets angrier is a difficulty curve. A boss that is
+ * dismantling the room is a different fight every two minutes.
+ *
+ * It is also the honest version of a line the mode has always printed: the
+ * Siege Barrage's warning says *cover will not save you*, and until now that
+ * meant "the shells arc over it". Now it means the cover is gone.
+ *
+ * Only the Overseer's own ordnance does this. Raiders shooting a wall leave it
+ * standing, because cover is the raid's resource and the point is that the boss
+ * is the only thing that can take it away.
+ */
+
+/**
+ * Integrity per cubic metre of prop, before material toughness — and the knob
+ * that decides how fast the room disappears. Measured with the harness: at 7,
+ * four hundred simulated seconds took down between zero and two structures
+ * across three runs, which is a system that exists in the code and not in the
+ * fight. Around 2 a raid loses the ground it is standing on over a phase, which
+ * is the timescale a boss fight actually has.
+ */
+export const STRUCTURE_INTEGRITY_PER_M3 = 2.2;
+export const STRUCTURE_INTEGRITY_MIN = 400;
+export const STRUCTURE_INTEGRITY_MAX = 14000;
+
+/**
+ * Footprint above which a ground-level prop is *terrain* rather than cover, and
+ * exempt.
+ *
+ * Maps are authored out of the same 5 m prop kit as the buildings, so the thing
+ * holding up half of Kungur is a 200 × 40 m box that is structurally identical
+ * to a wall — and the first version of this system was perfectly happy to
+ * collapse it into a rubble field the size of the map, taking the spawns, the
+ * ramps and everything standing on it with it. Anything with a footprint this
+ * large is the floor, and the floor is not part of the fight.
+ */
+export const TERRAIN_FOOTPRINT = 400;
+/** And the same ceiling for elevated decks, which are landforms at some size. */
+export const DECK_FOOTPRINT_MAX = 900;
+
+/** How much punishment each material soaks, relative to concrete. */
+export const STRUCTURE_TOUGHNESS: Record<string, number> = {
+  concrete: 1,
+  metal: 1.35,
+  sand: 0.7,
+  glass: 0.25,
+  hazard: 0.85,
+};
+
+/**
+ * Share of a blast's centre damage that goes into the map rather than into
+ * tanks — the boss's ordnance is sized against armour, and a wall is not
+ * armour. Kept as a separate knob from integrity so the two questions stay
+ * separate: this one is "how much of a shell goes into the building", and the
+ * one above is "how much building there is".
+ */
+export const DEMOLITION_POWER_SCALE = 0.9;
+
+/** Tall and thin enough to go over sideways rather than sit down. */
+export const TOPPLE_RATIO = 1.25;
+/** Seconds it takes to fall — long enough to read, short enough to fear. */
+export const TOPPLE_TIME = 0.9;
+export const TOPPLE_CRUSH_DAMAGE = 520;
+export const TOPPLE_CRUSH_IMPULSE = 16;
+
+/**
+ * How high the rubble stands. A tank climbs a 1.6 m step, so this is
+ * deliberately under it: what a building leaves behind is something you drive
+ * over, never something you shelter behind. Rubble that restored cover would
+ * make the whole system cosmetic.
+ */
+export const RUBBLE_HEIGHT = 1.1;
+
+/**
+ * Base height above which a prop stands on something rather than on the ground.
+ * An elevated prop that is also *flat* — a bridge span, a walkway, a roof — is
+ * a deck: it does not leave rubble, it falls away entirely, and whoever was
+ * shooting from up there discovers that the floor was a target. That gap is the
+ * one genuine hole the demolition can make, and it stays open for the rest of
+ * the fight. An elevated prop that is not flat is a parapet or a rooftop block,
+ * and it collapses where it stands, on top of whatever is holding it up.
+ */
+export const ELEVATED_BASE = 1.5;
+/**
+ * Height-to-footprint ratio below which an elevated prop is a floor. Tight: a
+ * 12 × 4 × 12 block sitting on a bank is cover that happens to be up a hill,
+ * not a deck, and at a looser ratio it was being deleted outright — and
+ * announced as the high ground going with it, which it was standing on.
+ */
+export const DECK_FLATNESS = 0.25;
+
+/**
+ * Blast damage a strike needs before it digs at all — above the main gun's
+ * 260, so the Cataclysm does not scar the floor with every shell and a crater
+ * always means something heavy landed: a rock, a barrage round, a Quake.
+ */
+export const CRATER_MIN_POWER = 300;
+/**
+ * Crater radius per square root of blast damage. Small on purpose, and the
+ * first pick was nearly three times this: a Meteor Storm dug fifteen-metre
+ * scars, the merge rule joined them, and a screenshot after three minutes
+ * showed a tank sitting in the middle of a single black disc the size of the
+ * arena. A crater is a mark the ordnance left, not a re-texture of the map.
+ */
+export const CRATER_RADIUS_PER_POWER = 0.12;
+/** Strikes closer together than this deepen one crater instead of adding one. */
+export const CRATER_MERGE = 6;
+/** And how far a crater can grow by being hit again. */
+export const CRATER_GROWTH = 0.25;
+export const CRATER_GROWTH_MAX = 4;
+export const CRATER_MAX = 40;
+/** Extra pathing cost bots pay for crossing churned ground. */
+export const CRATER_ROUGHNESS = 1.4;
+/** How near the surface a detonation has to be to leave a mark. */
+export const CRATER_SURFACE_REACH = 3;
+
+/** Structural damage a ramming Overseer does to whatever it drives through. */
+export const RAM_DEMOLITION_POWER = 900;
+export const RAM_DEMOLITION_REACH = 5;
+
+/**
+ * ---- The squad channel ------------------------------------------------
+ *
+ * The raid talking to itself.
+ *
+ * Until now the squad was scenery: four bots that happened to be shooting the
+ * same target, with no knowledge that a boss fight was happening around them.
+ * They stood in Quake rings. They drove through storms. Most damningly they
+ * could not *choose* to break a hunt — the rescue bar filled from passive chip
+ * damage or it did not fill at all, which meant the one mechanic in the mode
+ * that was written to be answered by the squad was the one mechanic the squad
+ * had no way to answer.
+ *
+ * So the calls below are not chatter with a mechanic attached; they are the
+ * mechanic, and the chatter is what makes it legible. Every line a squadmate
+ * says is something it is about to *do*, which is the only kind of radio worth
+ * having: "moving" means it is moving, "breaking it off you" means four guns
+ * are turning round, and the player can hear a rescue coming before the bar
+ * shows it.
+ */
+
+/**
+ * Seconds between any two calls, and between two calls on the same subject.
+ * Both were much shorter and the harness counted a line every six seconds
+ * across a whole fight — which is not a squad talking, it is a squad
+ * narrating, and it buries the Overseer's own warnings in the same six-line
+ * feed. At these numbers a fight carries a call every ten to fifteen seconds,
+ * which is roughly one per thing that actually happens.
+ */
+export const CALL_GAP = 3.2;
+export const CALL_TOPIC_GAP = 20;
+
+/**
+ * How far outside a danger zone a bot wants to be before it stops running.
+ * Generous: a squadmate that clears a Quake ring by half a metre and stops has
+ * technically obeyed and is still dead.
+ */
+export const EVACUATE_MARGIN = 8;
+/**
+ * Seconds left on a zone below which running is pointless — at that point the
+ * bot is better off firing than being caught mid-turn. It also stops a squad
+ * from spending the entire fight reacting to a wind-up that is about to end.
+ */
+export const EVACUATE_GIVE_UP = 0.35;
+
+/**
+ * How far a squadmate will break off its own fight to answer a hunt. The
+ * rescue has to cost something or it is not a decision — a bot that abandons a
+ * good firing position from across the map is just a homing missile with a
+ * name.
+ */
+export const RESCUE_REACH = 90;
+
+/**
  * Purge, the Juggernaut's ultimate, vents the reactor: it throws the raid off
  * the hull and patches the boss on the way. The heal is small against a pool
  * this size and clamped to the phase gate like every other heal it has, so it

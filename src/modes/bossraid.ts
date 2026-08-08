@@ -1,4 +1,5 @@
 import * as CANNON from 'cannon-es';
+import type * as THREE from 'three';
 import type { ModeCode, TeamId } from '../data/schema';
 import {
   ALLY_BOSS_DAMAGE,
@@ -18,11 +19,32 @@ import {
   type RaidPhase,
 } from '../data/raid';
 import type { BossController } from '../ai/boss';
+import { SquadChannel, SQUAD_LINES } from '../ai/squad';
+import type { NavGrid } from '../ai/navgrid';
+import { Demolition } from '../game/demolition';
 import type { Arena, DamageOptions } from '../game/types';
+import type { PhysicsWorld } from '../physics/world';
 import type { Tank } from '../entities/tank';
 import { BaseMode, type BossStatus, type MinimapMarker, type ModeResult, type ObjectiveHint } from './base';
 
 const TMP_FORWARD = new CANNON.Vec3();
+
+/** Cover-loss marks at which somebody in the squad says something about it. */
+const COVER_REMARKS = [0.2, 0.45, 0.7];
+
+/**
+ * Everything the raid needs that only exists once the battle has built a world:
+ * the colliders and meshes behind the map's props, and the grid the squad
+ * navigates. Handed over with the boss, since none of it is knowable when the
+ * mode is constructed.
+ */
+export interface RaidWorld {
+  arena: Arena;
+  phys: PhysicsWorld;
+  nav: NavGrid;
+  propBodies: CANNON.Body[];
+  propMeshes: THREE.Mesh[];
+}
 
 /**
  * Boss Raid. One Overseer against you and a squad of allied bots.
@@ -60,10 +82,42 @@ export class BossRaidMode extends BaseMode {
   private bossDownAt: number | null = null;
   private readonly damageSeen = new Map<number, number>();
 
+  /** The map coming apart, and the squad talking about it. */
+  private demolition: Demolition | null = null;
+  readonly squad = new SquadChannel(
+    () => this.now,
+    (text, kind) => this.arena?.notify(text, kind),
+  );
+  private arena: Arena | null = null;
+  private now = 0;
+  private markedSeen: Tank | null = null;
+  private stillSeen = false;
+  private coverRemarked = 0;
+
   /** Called by the battle once the Overseer and its squad exist. */
-  bindBoss(boss: Tank, ai: BossController): void {
+  bindBoss(boss: Tank, ai: BossController, world: RaidWorld): void {
     this.boss = boss;
     this.bossAi = ai;
+    this.arena = world.arena;
+    this.squad.boss = boss;
+    this.demolition = new Demolition(this.def, world.propBodies, world.propMeshes, {
+      arena: world.arena,
+      scene: this.scene,
+      phys: world.phys,
+      nav: world.nav,
+      warn: (x, z, radius, seconds, label) => this.squad.warn(x, z, radius, seconds, label),
+    });
+  }
+
+  /** The Overseer's ordnance, against the map. Nothing else reshapes it. */
+  onBlast(centre: CANNON.Vec3, radius: number, power: number, source: Tank | null): void {
+    if (!this.demolition || !this.boss || source !== this.boss) return;
+    this.demolition.blast(centre, radius, power);
+  }
+
+  /** Structural damage from the Overseer driving through something. */
+  demolish(at: CANNON.Vec3, reach: number, power: number): void {
+    this.demolition?.ram(at, reach, power);
   }
 
   get phase(): RaidPhase {
@@ -213,8 +267,15 @@ export class BossRaidMode extends BaseMode {
    * kill — so a squadmate that holds the boss's attention for two minutes has
    * something to show for it on the scoreboard.
    */
-  override update(_dt: number, arena: Arena): void {
+  override update(dt: number, arena: Arena): void {
     if (!this.boss) return;
+    this.arena = arena;
+    this.now = arena.time;
+
+    this.demolition?.update(dt);
+    this.squad.update();
+    this.updateSquad(arena);
+
     for (const t of arena.tanks) {
       if (t === this.boss) continue;
       const seen = this.damageSeen.get(t.id);
@@ -222,6 +283,66 @@ export class BossRaidMode extends BaseMode {
       if (seen === undefined || t.damageDealt <= seen) continue;
       t.addBattlePoints((t.damageDealt - seen) * POINTS_PER_DAMAGE);
     }
+  }
+
+  /**
+   * What the squad knows and what it says about it.
+   *
+   * The bots own two calls themselves, because they are the two that are
+   * actions the bot is taking — clearing a ring, and turning round to break a
+   * hunt. Everything here is the other kind: an observation about the fight
+   * that no single squadmate is in a position to make, spoken by whoever
+   * happens to be closest to it. Keeping the split that way is what stops
+   * bot.ts having to learn what a boss is.
+   */
+  private updateSquad(arena: Arena): void {
+    const ai = this.bossAi;
+    if (!ai) return;
+
+    // The hunt. Published to the channel rather than inferred, because the
+    // rescue is the one thing in this mode that has to be *chosen* — a squad
+    // that only ever breaks a mark by accident is a squad the marked raider
+    // cannot count on, and the HUD promises them they can.
+    const marked = ai.marked;
+    this.squad.rescue = marked ?? null;
+    if (marked && marked !== this.markedSeen && !marked.isPlayer) {
+      this.squad.say(marked, 'marked', SquadChannel.line([...SQUAD_LINES.marked], marked.id));
+    }
+    this.markedSeen = marked ?? null;
+
+    // The stillness — the beat where the Overseer stops dead before an ability
+    // lands. It is the fairest window in the fight and it was, until now,
+    // something only a human noticed. A squadmate calling it is how a raid
+    // learns the tell exists.
+    const still = ai.stilled;
+    if (still && !this.stillSeen) {
+      const speaker = this.nearestAlly(arena, this.boss!.position);
+      if (speaker) this.squad.say(speaker, 'push', SquadChannel.line([...SQUAD_LINES.push], speaker.id));
+    }
+    this.stillSeen = still;
+
+    // And the map going away underneath everybody.
+    const lost = this.demolition?.coverLost ?? 0;
+    while (this.coverRemarked < COVER_REMARKS.length && lost >= COVER_REMARKS[this.coverRemarked]) {
+      this.coverRemarked += 1;
+      const speaker = this.nearestAlly(arena, this.boss!.position);
+      if (speaker) this.squad.say(speaker, 'cover', SquadChannel.line([...SQUAD_LINES.cover], speaker.id));
+    }
+  }
+
+  /** Whichever squadmate is closest to a point, for a line that needs a voice. */
+  private nearestAlly(arena: Arena, to: CANNON.Vec3): Tank | null {
+    let best: Tank | null = null;
+    let bestDist = Infinity;
+    for (const t of arena.tanks) {
+      if (t === this.boss || t.isPlayer || !t.alive) continue;
+      const d = t.position.distanceTo(to);
+      if (d < bestDist) {
+        bestDist = d;
+        best = t;
+      }
+    }
+    return best;
   }
 
   /**
@@ -287,7 +408,14 @@ export class BossRaidMode extends BaseMode {
       markRemaining: this.bossAi?.markRemaining ?? 0,
       markBreak: this.bossAi?.markBreakProgress ?? 0,
       dread: this.bossAi?.dreadLevel ?? 0,
+      coverLost: this.demolition?.coverLost ?? 0,
+      structuresDown: this.demolition?.structuresDown ?? 0,
     };
+  }
+
+  override dispose(): void {
+    this.demolition?.dispose();
+    this.demolition = null;
   }
 
   /** Short: the boss bar below the clock already carries the detail. */
