@@ -49,6 +49,8 @@ import {
   QUAKE_RADIUS,
   RAM_COOLDOWN,
   RAM_DAMAGE,
+  RAM_DEMOLITION_POWER,
+  RAM_DEMOLITION_REACH,
   RAM_FROM_PHASE,
   RAM_IMPULSE,
   RAM_MIN_SPEED,
@@ -92,6 +94,20 @@ export interface BossDeps {
   phase: () => RaidPhase;
   /** Nearest live supply box of the given kinds, so the boss can contest them. */
   nearestSupply: (from: CANNON.Vec3, kinds: SupplyKind[]) => { pos: CANNON.Vec3 } | null;
+  /**
+   * Ground the Overseer has committed to hitting, published to the squad
+   * channel as it commits to it.
+   *
+   * This gives the squad nothing the raid was not already shown — every zone
+   * pushed through here has a ring drawn on the floor or a warning in the feed
+   * at the same instant. What it buys is squadmates that can *read* their own
+   * HUD, which up to now they could not: the bots stood in Quake rings and
+   * drove through storms, and a raid whose only casualty-avoidance was the
+   * human's made the boss's telegraphs a solo mechanic in a squad fight.
+   */
+  warn?: (x: number, z: number, radius: number, seconds: number, label: string) => void;
+  /** Structural damage the Overseer does by driving through the map. */
+  demolish?: (at: CANNON.Vec3, reach: number, power: number) => void;
 }
 
 interface Telegraph {
@@ -201,6 +217,8 @@ export class BossController implements AiController {
   private markerTimer = 0;
   /** When each raider may next be run over, keyed by tank id. */
   private readonly ramReadyAt = new Map<number, number>();
+  /** And when it may next put a shoulder through a building. */
+  private structureRamAt = 0;
 
   private lastPhase = 1;
   private boxGoal: CANNON.Vec3 | null = null;
@@ -918,7 +936,36 @@ export class BossController implements AiController {
       };
       this.readyAt[id] = now + def.windup + def.cooldown * phase.cooldownScale;
       arena.notify(def.warning, 'warning');
+      this.publishTelegraph(id, def);
       return;
+    }
+  }
+
+  /**
+   * The ground an ability has just committed to, handed to the squad channel.
+   * Exactly what the wind-up is already drawing on the floor, and nothing else:
+   * the Quake ring is at the hull, the storm's marks are where the first rocks
+   * will fall, the barrage's is the knot of raiders it ranged.
+   */
+  private publishTelegraph(id: BossAbilityDef['id'], def: BossAbilityDef): void {
+    const warn = this.deps.warn;
+    if (!warn) return;
+    switch (id) {
+      case 'quake':
+        warn(this.self.position.x, this.self.position.z, QUAKE_RADIUS, def.windup, 'quake');
+        break;
+      case 'meteor':
+        for (const p of this.telegraph?.points ?? []) {
+          warn(p.x, p.z, METEOR_SPLASH_RADIUS, def.windup, 'storm');
+        }
+        break;
+      case 'barrage': {
+        const aim = this.barrageAim();
+        if (aim) warn(aim.x, aim.z, BARRAGE_SPLASH_RADIUS + BARRAGE_SPREAD, def.windup + 1.4, 'barrage');
+        break;
+      }
+      default:
+        break;
     }
   }
 
@@ -1091,6 +1138,16 @@ export class BossController implements AiController {
 
     const yaw = Math.atan2(delta.x, delta.z);
     const cp = Math.cos(pitch);
+    // Time of flight straight off the horizontal component, which is what the
+    // squad's zone deadline has to match: a lobbed shell is the one thing in
+    // the mode where the warning and the impact are seconds apart.
+    this.deps.warn?.(
+      target.x,
+      target.z,
+      BARRAGE_SPLASH_RADIUS,
+      Math.max(0.6, horizontal / Math.max(1, BARRAGE_SPEED * cp)),
+      'barrage',
+    );
     arena.spawnProjectile({
       owner: this.self,
       turret: this.self.turretDef,
@@ -1169,6 +1226,9 @@ export class BossController implements AiController {
     this.stormSettlesAt = Math.max(this.stormSettlesAt, arena.time + flight + 0.6);
 
     arena.fx.incoming(impact, 0xff5a1f, METEOR_SPLASH_RADIUS, flight);
+    // The same ring, in a form a squadmate can read. The ground marker and this
+    // are one piece of information published to two kinds of raider.
+    this.deps.warn?.(impact.x, impact.z, METEOR_SPLASH_RADIUS, flight, 'storm');
     arena.spawnProjectile({
       owner: this.self,
       turret: this.self.turretDef,
@@ -1409,6 +1469,19 @@ export class BossController implements AiController {
     const size = this.self.hull.size;
     const half = Math.max(size[0], size[2]) / 2;
     const over = Math.min(speed - RAM_MIN_SPEED, RAM_SPEED_WINDOW);
+
+    // It stops going round raiders at siege speed; this is what stops it going
+    // round *buildings* at the same time. On the same cooldown as running a
+    // raider over, because a Juggernaut grinding along a wall for four seconds
+    // should knock it down once, not sixty times.
+    if (arena.time >= this.structureRamAt) {
+      this.structureRamAt = arena.time + RAM_COOLDOWN;
+      this.deps.demolish?.(
+        this.self.position,
+        half + RAM_DEMOLITION_REACH,
+        RAM_DEMOLITION_POWER * (1 + over / RAM_SPEED_WINDOW),
+      );
+    }
 
     for (const t of arena.tanks) {
       if (t === this.self || !t.alive || !arena.areEnemies(this.self, t)) continue;

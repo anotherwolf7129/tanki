@@ -21,6 +21,13 @@ export class NavGrid {
   private readonly height: Float32Array;
   private readonly blocked: Uint8Array;
   private readonly clearance: Float32Array;
+  /**
+   * Extra pathing cost for ground that has been churned up — crater fields and
+   * the spill around a collapsed building. Nothing is made impassable by it: a
+   * bot will still cross a crater to reach something worth reaching, it just
+   * stops treating a shelled street as if it were a road.
+   */
+  private readonly rough: Float32Array;
 
   // Scratch buffers reused by every search — pathfinding must not allocate.
   private readonly gScore: Float32Array;
@@ -41,6 +48,7 @@ export class NavGrid {
     this.height = new Float32Array(n);
     this.blocked = new Uint8Array(n);
     this.clearance = new Float32Array(n);
+    this.rough = new Float32Array(n);
     this.gScore = new Float32Array(n);
     this.fScore = new Float32Array(n);
     this.cameFrom = new Int32Array(n);
@@ -52,10 +60,14 @@ export class NavGrid {
   }
 
   private sample(phys: PhysicsWorld): void {
+    this.sampleRegion(phys, 0, 0, this.cols - 1, this.rows - 1);
+  }
+
+  private sampleRegion(phys: PhysicsWorld, i0: number, j0: number, i1: number, j1: number): void {
     const from = new CANNON.Vec3();
     const to = new CANNON.Vec3();
-    for (let j = 0; j < this.rows; j++) {
-      for (let i = 0; i < this.cols; i++) {
+    for (let j = Math.max(0, j0); j <= Math.min(this.rows - 1, j1); j++) {
+      for (let i = Math.max(0, i0); i <= Math.min(this.cols - 1, i1); i++) {
         const idx = j * this.cols + i;
         const x = this.originX + (i + 0.5) * CELL;
         const z = this.originZ + (j + 0.5) * CELL;
@@ -75,12 +87,48 @@ export class NavGrid {
   }
 
   /**
+   * Re-sample a rectangle of the grid after the map itself has changed — a
+   * building toppled into rubble, an elevated deck shot away.
+   *
+   * The whole navgrid is sampled out of the physics world in the first place,
+   * so keeping it honest after a demolition is the same operation over a small
+   * window rather than a separate authoring step. Clearance is recomputed one
+   * ring wider than the resampled patch, since a cell's clearance is a function
+   * of its neighbours.
+   */
+  resample(phys: PhysicsWorld, minX: number, minZ: number, maxX: number, maxZ: number): void {
+    const i0 = Math.floor((minX - this.originX) / CELL) - 1;
+    const j0 = Math.floor((minZ - this.originZ) / CELL) - 1;
+    const i1 = Math.floor((maxX - this.originX) / CELL) + 1;
+    const j1 = Math.floor((maxZ - this.originZ) / CELL) + 1;
+    this.sampleRegion(phys, i0, j0, i1, j1);
+    this.computeClearance(i0 - 1, j0 - 1, i1 + 1, j1 + 1);
+  }
+
+  /** Marks ground as churned up, so paths prefer to go round it. */
+  roughen(x: number, z: number, radius: number, amount: number): void {
+    const i0 = Math.floor((x - radius - this.originX) / CELL);
+    const j0 = Math.floor((z - radius - this.originZ) / CELL);
+    const i1 = Math.floor((x + radius - this.originX) / CELL);
+    const j1 = Math.floor((z + radius - this.originZ) / CELL);
+    for (let j = Math.max(0, j0); j <= Math.min(this.rows - 1, j1); j++) {
+      for (let i = Math.max(0, i0); i <= Math.min(this.cols - 1, i1); i++) {
+        const cx = this.originX + (i + 0.5) * CELL;
+        const cz = this.originZ + (j + 0.5) * CELL;
+        if (Math.hypot(cx - x, cz - z) > radius) continue;
+        const idx = j * this.cols + i;
+        this.rough[idx] = Math.min(6, this.rough[idx] + amount);
+      }
+    }
+  }
+
+  /**
    * Distance-to-obstacle field. Bots pay a cost for hugging walls, which keeps
    * a 5 m-wide hull off corners without inflating obstacles into dead ends.
    */
-  private computeClearance(): void {
-    for (let j = 0; j < this.rows; j++) {
-      for (let i = 0; i < this.cols; i++) {
+  private computeClearance(i0 = 0, j0 = 0, i1 = this.cols - 1, j1 = this.rows - 1): void {
+    for (let j = Math.max(0, j0); j <= Math.min(this.rows - 1, j1); j++) {
+      for (let i = Math.max(0, i0); i <= Math.min(this.cols - 1, i1); i++) {
         const idx = j * this.cols + i;
         if (this.blocked[idx]) {
           this.clearance[idx] = 0;
@@ -206,7 +254,7 @@ export class NavGrid {
           }
 
           const step = (di && dj ? 1.4142 : 1) * CELL;
-          const penalty = (3 - this.clearance[n]) * 1.4 + climb * 1.5;
+          const penalty = (3 - this.clearance[n]) * 1.4 + climb * 1.5 + this.rough[n];
           const tentative = (this.visited[current] === stamp ? this.gScore[current] : 0) + step + penalty;
 
           if (this.visited[n] !== stamp) {

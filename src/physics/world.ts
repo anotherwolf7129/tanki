@@ -14,6 +14,12 @@ export const LAYER = {
 export const SHOT_MASK = LAYER.GROUND | LAYER.PROP | LAYER.TANK;
 export const WORLD_MASK = LAYER.GROUND | LAYER.PROP;
 
+/** Ground plus one body per entry in `MapDef.props`, in the same order. */
+export interface MapBodies {
+  ground: CANNON.Body;
+  props: CANNON.Body[];
+}
+
 export interface RayHit {
   body: CANNON.Body;
   point: CANNON.Vec3;
@@ -99,8 +105,7 @@ export class PhysicsWorld {
    * sampling, line of sight, shots — depends on hitting the floor, that is not
    * a quirk worth living with. A box also gives the broadphase a real AABB.
    */
-  buildMap(def: MapDef): CANNON.Body[] {
-    const bodies: CANNON.Body[] = [];
+  buildMap(def: MapDef): MapBodies {
     const w = def.bounds.x * 2 + 120;
     const d = def.bounds.z * 2 + 120;
     const thickness = 40;
@@ -113,13 +118,18 @@ export class PhysicsWorld {
       collisionFilterMask: -1,
     });
     this.world.addBody(ground);
-    bodies.push(ground);
 
-    for (const p of def.props) bodies.push(this.addProp(p));
-    return bodies;
+    // Prop bodies come back index-aligned with `def.props`, which is what lets
+    // Boss Raid's demolition find the collider behind a given prop — and the
+    // mesh, which `createScene` hands back on the same indices.
+    return { ground, props: def.props.map((p) => this.addProp(p)) };
   }
 
-  private addProp(p: PropDef): CANNON.Body {
+  remove(body: CANNON.Body): void {
+    this.world.removeBody(body);
+  }
+
+  addProp(p: PropDef): CANNON.Body {
     const [w, h, d] = p.size;
     const quat = new CANNON.Quaternion();
     quat.setFromEuler(0, (p.rot ?? 0) * DEG, 0);

@@ -68,7 +68,8 @@ export function perimeter(halfX: number, halfZ: number, h = 12, t = 4): PropDef[
     box(0, halfZ + t / 2, halfX * 2 + t * 2, h, t),
     box(-halfX - t / 2, 0, t, h, halfZ * 2),
     box(halfX + t / 2, 0, t, h, halfZ * 2),
-  ];
+    // Marked so demolition never brings the edge of the world down.
+  ].map((p) => ({ ...p, structural: true }));
 }
 
 /** Mirror props across the X axis (x -> -x), for symmetric team maps. */

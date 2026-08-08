@@ -27,7 +27,7 @@ import type { InputState } from '../core/input';
 import { MineSystem, PickupSystem } from '../entities/pickup';
 import { ProjectileSystem } from '../entities/projectile';
 import { Tank } from '../entities/tank';
-import { PhysicsWorld, WORLD_MASK } from '../physics/world';
+import { PhysicsWorld, WORLD_MASK, type MapBodies } from '../physics/world';
 import { ChaseCamera } from '../render/camera';
 import { Effects } from '../render/effects';
 import { createScene, type SceneBundle } from '../render/scene';
@@ -81,6 +81,7 @@ export class Battle implements Arena {
   readonly profile: DifficultyProfile;
 
   private readonly bundle: SceneBundle;
+  private readonly mapBodies: MapBodies;
   private readonly nav: NavGrid;
   private readonly projectiles: ProjectileSystem;
   private readonly pickups: PickupSystem;
@@ -108,7 +109,7 @@ export class Battle implements Arena {
     this.dynamic = new DynamicDifficulty(this.profile);
 
     this.phys = new PhysicsWorld(this.def.gravityScale);
-    this.phys.buildMap(this.def);
+    this.mapBodies = this.phys.buildMap(this.def);
     this.bundle = createScene(this.def);
     this.fx = new Effects(this.bundle.scene);
     this.camera = new ChaseCamera(aspect, this.phys);
@@ -240,6 +241,9 @@ export class Battle implements Arena {
         slack: () => this.dynamic.slack,
         nearestPickup: (from) => this.pickups.nearest(from),
         objective: (self) => this.mode.objectiveFor(self, this),
+        // The raid's shared channel. It is the only thing separating a squad
+        // from four bots that happen to be shooting the same target.
+        squad: mode.squad,
       });
     }
 
@@ -262,9 +266,17 @@ export class Battle implements Arena {
       profile: this.profile,
       phase: () => phaseFor(boss.healthFraction),
       nearestSupply: (from, kinds) => this.pickups.nearest(from, kinds),
+      warn: (x, z, radius, seconds, label) => mode.squad.warn(x, z, radius, seconds, label),
+      demolish: (at, reach, power) => mode.demolish(at, reach, power),
     });
     boss.ai = ai;
-    mode.bindBoss(boss, ai);
+    mode.bindBoss(boss, ai, {
+      arena: this,
+      phys: this.phys,
+      nav: this.nav,
+      propBodies: this.mapBodies.props,
+      propMeshes: this.bundle.props,
+    });
 
     // It fights with supplies like everyone else. A finite stock, so a raid that
     // keeps the pressure on eventually spends them for it — and once they are
@@ -458,6 +470,12 @@ export class Battle implements Arena {
     source: Tank | null,
     opts: { selfDamage: boolean; impactForce: number; turret?: TurretDef },
   ): void {
+    // Every blast in the game already comes through here, which makes this the
+    // one place a mode can be told the world was hit as well as the tanks in
+    // it. Boss Raid is the only taker: the Overseer's ordnance takes the map
+    // apart, and nothing a raider fires does.
+    this.mode.onBlast?.(centre, radius, damageMax, source);
+
     for (const tank of this.tanks) {
       if (!tank.alive) continue;
       if (tank === source && !opts.selfDamage) continue;
@@ -820,6 +838,15 @@ export class Battle implements Arena {
       pos.copy(next);
     }
     return null;
+  }
+
+  /**
+   * Radio calls the raid squad has made. Harness-facing, and zero in every
+   * other mode: a raid where nobody ever speaks means the squad branches never
+   * fired, which is invisible from any other number the harness reports.
+   */
+  squadCalls(): number {
+    return this.mode instanceof BossRaidMode ? this.mode.squad.calls : 0;
   }
 
   resize(aspect: number): void {
