@@ -23,7 +23,7 @@ export const rio: MapDef = {
   displayName: 'Rio',
   size: 'large',
   maxPlayers: 20,
-  modes: ['DM', 'TDM', 'CTF', 'CP'],
+  modes: ['DM', 'TDM', 'CTF', 'CP', 'RAID'],
   gravityScale: 1.0,
   theme: 'urban',
   bounds: half,

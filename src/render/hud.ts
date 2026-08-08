@@ -42,6 +42,7 @@ export class Hud {
     this.drawLockOn(battle, snap, w, h);
     this.drawReticle(battle, snap, w, h);
     this.drawTopBar(snap, w);
+    if (snap.boss) this.drawBoss(snap.boss, battle.time, w, h);
     this.drawHealth(snap, w, h);
     this.drawWeapon(snap, w, h);
     this.drawSupplies(snap, w, h);
@@ -239,6 +240,101 @@ export class Hud {
       ctx.fillText(String(Math.floor(snap.teamScores.red)), w / 2 + 165, 35);
       ctx.restore();
     }
+  }
+
+  /**
+   * The raid's centre of gravity: one bar for the boss, notched where its
+   * phases change, with the wind-up of whatever it is about to do drawn over
+   * the top and your share of its attention beside it.
+   *
+   * The aggro meter is the piece that matters. Your damage advantage is what
+   * fills it, and a full meter means the next shell is yours — so the number
+   * that makes you strong is also the number that tells you to break away.
+   */
+  private drawBoss(boss: NonNullable<BattleSnapshot['boss']>, time: number, w: number, _h: number): void {
+    const ctx = this.ctx;
+    const width = Math.min(680, w - 120);
+    const x = (w - width) / 2;
+    // Clear of the top bar, which ends at 58.
+    const y = 96;
+
+    ctx.save();
+    ctx.fillStyle = PANEL;
+    roundRect(ctx, x - 12, y - 22, width + 24, 66, 10);
+    ctx.fill();
+
+    ctx.textAlign = 'left';
+    ctx.font = '700 13px system-ui, sans-serif';
+    ctx.fillStyle = boss.healthFraction > 0 ? '#f87171' : '#9aa4b2';
+    ctx.fillText(boss.name, x, y - 10);
+    ctx.font = '600 11px system-ui, sans-serif';
+    ctx.fillStyle = '#9aa4b2';
+    ctx.fillText(`PHASE ${boss.phase} · ${boss.phaseName.toUpperCase()}`, x + 100, y - 10);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = boss.reinforcements <= 2 ? '#fbbf24' : '#9aa4b2';
+    ctx.fillText(`${boss.reinforcements} REINFORCEMENTS`, x + width, y - 10);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    roundRect(ctx, x, y, width, 18, 4);
+    ctx.fill();
+    ctx.fillStyle = boss.healthFraction > 0.66 ? '#e0483c' : boss.healthFraction > 0.33 ? '#f97316' : '#fbbf24';
+    roundRect(ctx, x, y, Math.max(2, width * boss.healthFraction), 18, 4);
+    ctx.fill();
+
+    // Phase notches, so a health bar this long still reads as a fight with acts.
+    ctx.strokeStyle = 'rgba(8,10,14,0.75)';
+    ctx.lineWidth = 2;
+    for (const mark of boss.phaseMarks) {
+      ctx.beginPath();
+      ctx.moveTo(x + width * mark, y);
+      ctx.lineTo(x + width * mark, y + 18);
+      ctx.stroke();
+    }
+
+    // Outlined, because the label sits at the centre of the bar and the bar is
+    // dark behind it at low health and bright behind it at full.
+    ctx.textAlign = 'center';
+    ctx.font = '700 11px ui-monospace, monospace';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(8,10,14,0.85)';
+    ctx.strokeText(`${Math.ceil(boss.health)} / ${boss.maxHealth}`, x + width / 2, y + 9);
+    ctx.fillStyle = '#f2f6fa';
+    ctx.fillText(`${Math.ceil(boss.health)} / ${boss.maxHealth}`, x + width / 2, y + 9);
+
+    // Aggro meter.
+    const meterW = 150;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    roundRect(ctx, x, y + 26, meterW, 8, 3);
+    ctx.fill();
+    ctx.fillStyle = boss.targetingPlayer ? '#f87171' : '#818cf8';
+    roundRect(ctx, x, y + 26, Math.max(2, meterW * clamp(boss.playerThreat, 0, 1)), 8, 3);
+    ctx.fill();
+    ctx.font = '600 10px system-ui, sans-serif';
+    ctx.fillStyle = boss.targetingPlayer ? '#f87171' : '#9aa4b2';
+    ctx.fillText(
+      boss.targetingPlayer ? 'IT IS LOOKING AT YOU' : `THREAT ${Math.round(boss.playerThreat * 100)}%`,
+      x + meterW + 10,
+      y + 31,
+    );
+
+    // Ability wind-up. Deliberately loud: every one of these is avoidable.
+    if (boss.telegraph) {
+      const barX = x + width - 220;
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      roundRect(ctx, barX, y + 26, 220, 8, 3);
+      ctx.fill();
+      ctx.fillStyle = '#fbbf24';
+      roundRect(ctx, barX, y + 26, Math.max(2, 220 * clamp(boss.telegraphProgress, 0, 1)), 8, 3);
+      ctx.fill();
+      ctx.textAlign = 'right';
+      ctx.font = '700 11px system-ui, sans-serif';
+      // Flashing, because a wind-up you did not notice is a wind-up that reads
+      // as the boss cheating.
+      ctx.fillStyle = Math.sin(time * 14) > 0 ? '#fbbf24' : '#f87171';
+      ctx.fillText(boss.telegraph.toUpperCase(), x + width, y + 20);
+    }
+    ctx.restore();
   }
 
   private drawHealth(snap: BattleSnapshot, _w: number, h: number): void {
@@ -545,16 +641,25 @@ export class Hud {
 
   private drawRespawn(snap: BattleSnapshot, w: number, h: number): void {
     const ctx = this.ctx;
+    const out = snap.boss?.playerOut === true;
     ctx.save();
     ctx.fillStyle = 'rgba(8,10,14,0.45)';
     ctx.fillRect(0, 0, w, h);
     ctx.textAlign = 'center';
-    ctx.fillStyle = '#e6edf5';
+    ctx.fillStyle = out ? '#f87171' : '#e6edf5';
     ctx.font = '700 34px system-ui, sans-serif';
-    ctx.fillText('DESTROYED', w / 2, h / 2 - 20);
+    ctx.fillText(out ? 'NO REINFORCEMENTS' : 'DESTROYED', w / 2, h / 2 - 20);
     ctx.font = '600 18px system-ui, sans-serif';
     ctx.fillStyle = '#9aa4b2';
-    ctx.fillText(`Respawning in ${Math.max(0, snap.player.respawnTimer).toFixed(1)}s`, w / 2, h / 2 + 16);
+    ctx.fillText(
+      out
+        ? snap.viewing === snap.player
+          ? 'The raid is over'
+          : `Watching ${snap.viewing.name} — your squad is still up`
+        : `Respawning in ${Math.max(0, snap.player.respawnTimer).toFixed(1)}s`,
+      w / 2,
+      h / 2 + 16,
+    );
     ctx.restore();
   }
 

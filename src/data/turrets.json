@@ -353,5 +353,27 @@
     "selfDamage": false,
     "purchasable": false,
     "special": ["modeRestricted"]
+  },
+  "cataclysm": {
+    "displayName": "Cataclysm",
+    "class": "special",
+    "fireMode": "splash",
+    "damage": 460,
+    "weakDamage": 260,
+    "impactForce": 4.2,
+    "recoil": 0.0,
+    "reloadTime": 3.5,
+    "rotationSpeed": 46,
+    "rotationAcceleration": 88,
+    "rangeMaxDamage": 70,
+    "rangeMinDamage": 160,
+    "hardCap": 180,
+    "pitchUpDeg": 34,
+    "pitchDownDeg": 14,
+    "projectileSpeed": 150,
+    "splash": { "radius": 9, "damageMax": 260, "damageMin": 110 },
+    "selfDamage": false,
+    "purchasable": false,
+    "special": ["modeRestricted", "siege", "slowTraverse"]
   }
 }

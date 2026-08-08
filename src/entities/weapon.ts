@@ -28,6 +28,7 @@ const TURRET_COLOURS: Record<string, number> = {
   gauss: 0x818cf8,
   shaft: 0x67e8f9,
   terminator: 0xef4444,
+  cataclysm: 0xff5a3c,
 };
 
 /** Full damage inside `rangeMaxDamage`, linear down to `weakDamage`, then flat. */

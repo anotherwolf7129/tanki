@@ -18,7 +18,7 @@ export const madness: MapDef = {
   displayName: 'Madness',
   size: 'large',
   maxPlayers: 32,
-  modes: ['DM', 'TDM'],
+  modes: ['DM', 'TDM', 'RAID'],
   gravityScale: 0.35,
   theme: 'space',
   bounds: half,

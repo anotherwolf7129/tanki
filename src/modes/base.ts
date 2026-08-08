@@ -1,7 +1,7 @@
 import type * as CANNON from 'cannon-es';
 import type * as THREE from 'three';
 import type { MapDef, ModeCode, TeamId } from '../data/schema';
-import type { Arena } from '../game/types';
+import type { Arena, DamageOptions } from '../game/types';
 import type { Tank } from '../entities/tank';
 
 export interface ObjectiveHint {
@@ -26,6 +26,28 @@ export interface ModeResult {
   reason?: string;
 }
 
+/** Everything the HUD needs to draw a boss fight. Null outside Boss Raid. */
+export interface BossStatus {
+  name: string;
+  health: number;
+  maxHealth: number;
+  healthFraction: number;
+  phase: number;
+  phaseName: string;
+  /** Health fractions where the phases change, for the notches on the bar. */
+  phaseMarks: number[];
+  /** True while the boss's gun is pointed at you specifically. */
+  targetingPlayer: boolean;
+  /** Your share of its attention, 0..1. */
+  playerThreat: number;
+  reinforcements: number;
+  /** Ability currently winding up, and how far through the wind-up it is. */
+  telegraph: string | null;
+  telegraphProgress: number;
+  /** True once the player has spent the last reinforcement and cannot return. */
+  playerOut: boolean;
+}
+
 export interface ModeController {
   readonly code: ModeCode;
   readonly teams: boolean;
@@ -38,6 +60,15 @@ export interface ModeController {
   result(elapsed: number, arena: Arena): ModeResult;
   hudLine(playerTeam: TeamId): string;
   markers(): MinimapMarker[];
+  /**
+   * Mode-specific multiplier applied inside the battle's damage funnel. Modes
+   * that do not reshape damage return 1 and cost nothing.
+   */
+  damageScale(target: Tank, source: Tank | null, opts: DamageOptions, arena: Arena): number;
+  /** False keeps a destroyed tank out of the fight — raids run on a ticket pool. */
+  canRespawn(tank: Tank, arena: Arena): boolean;
+  /** Boss-fight state for the HUD, or null in every other mode. */
+  bossStatus(arena: Arena): BossStatus | null;
   dispose(): void;
 }
 
@@ -64,6 +95,15 @@ export abstract class BaseMode implements ModeController {
   abstract hudLine(playerTeam: TeamId): string;
   markers(): MinimapMarker[] {
     return [];
+  }
+  damageScale(_target: Tank, _source: Tank | null, _opts: DamageOptions, _arena: Arena): number {
+    return 1;
+  }
+  canRespawn(_tank: Tank, _arena: Arena): boolean {
+    return true;
+  }
+  bossStatus(_arena: Arena): BossStatus | null {
+    return null;
   }
   dispose(): void {}
 
