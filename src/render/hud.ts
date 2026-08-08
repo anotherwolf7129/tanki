@@ -38,6 +38,9 @@ export class Hud {
     ctx.clearRect(0, 0, w, h);
     ctx.textBaseline = 'middle';
 
+    // Under everything else: the raid's own HUD should sit on top of the mood,
+    // not compete with it.
+    if (snap.boss) this.drawDread(snap.boss, battle.time, w, h);
     this.drawDamageNumbers(battle, w, h);
     this.drawLockOn(battle, snap, w, h);
     this.drawReticle(battle, snap, w, h);
@@ -49,6 +52,7 @@ export class Hud {
     this.drawMinimap(battle, w, h);
     this.drawFeed(snap, h);
     this.drawStatus(snap, w, h);
+    if (snap.boss?.markedName && snap.player.alive) this.drawMark(battle, snap.boss, battle.time, w, h);
     if (snap.selfDestruct != null) this.drawSelfDestruct(snap.selfDestruct, w, h);
     if (!snap.player.alive && !snap.over) this.drawRespawn(snap, w, h);
     if (this.showScoreboard || snap.over) this.drawScoreboard(snap, w, h);
@@ -349,6 +353,135 @@ export class Hud {
       ctx.fillStyle = Math.sin(time * 14) > 0 ? '#fbbf24' : '#f87171';
       ctx.fillText(boss.telegraph.toUpperCase(), x + width, y + 20);
     }
+    ctx.restore();
+  }
+
+  /**
+   * The dread vignette — the screen edges bleeding as the Overseer closes.
+   *
+   * There is nothing to read here and nothing to do about it, which is the
+   * point: it is the only element on this HUD that is not information. Between
+   * abilities the raid used to be looking at a perfectly calm screen while a
+   * six-tonne siege platform drove up behind them, and no amount of shell
+   * damage fixes a fight whose quiet moments look safe.
+   *
+   * Kept well under the threshold where it would hide a meteor ring — the
+   * warnings this mode gives are the contract, and mood is never allowed to eat
+   * one.
+   */
+  private drawDread(boss: NonNullable<BattleSnapshot['boss']>, time: number, w: number, h: number): void {
+    // Being hunted sets a floor under the pressure and gives it a pulse, so the
+    // marked raider's screen is breathing even while the boss is still far off.
+    const hunted = boss.markedPlayer ? 0.55 + Math.sin(time * 5) * 0.12 : 0;
+    const level = clamp(Math.max(boss.dread, hunted), 0, 1);
+    if (level < 0.02) return;
+
+    const ctx = this.ctx;
+    ctx.save();
+    const gradient = ctx.createRadialGradient(
+      w / 2,
+      h / 2,
+      Math.min(w, h) * 0.3,
+      w / 2,
+      h / 2,
+      Math.max(w, h) * 0.7,
+    );
+    gradient.addColorStop(0, 'rgba(150,12,12,0)');
+    gradient.addColorStop(1, `rgba(150,12,12,${(level * 0.42).toFixed(3)})`);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  /**
+   * The hunt, on screen.
+   *
+   * Two audiences and two different jobs. The quarry needs to know it is them,
+   * how long they have to survive, and — the thing that actually matters while
+   * you are reversing away from something faster than you — *where it is*, which
+   * is why the compass arrow is here rather than left to the minimap.
+   *
+   * Everyone else needs to know that a teammate is being run down and that the
+   * bar filling up is the one they can do something about. A rescue mechanic
+   * whose progress is invisible is a rescue mechanic nobody attempts.
+   */
+  private drawMark(
+    battle: Battle,
+    boss: NonNullable<BattleSnapshot['boss']>,
+    time: number,
+    w: number,
+    h: number,
+  ): void {
+    const ctx = this.ctx;
+    const y = h * 0.26;
+    ctx.save();
+    ctx.textAlign = 'center';
+
+    if (boss.markedPlayer) {
+      ctx.font = '800 30px system-ui, sans-serif';
+      ctx.fillStyle = Math.sin(time * 9) > 0 ? '#f87171' : '#fbbf24';
+      ctx.fillText('IT HAS MARKED YOU', w / 2, y);
+      ctx.font = '600 13px system-ui, sans-serif';
+      ctx.fillStyle = '#e6edf5';
+      ctx.fillText(`SURVIVE ${boss.markRemaining.toFixed(1)}s — OR GET HELP`, w / 2, y + 24);
+      this.drawMarkCompass(battle, w, h);
+    } else {
+      ctx.font = '700 17px system-ui, sans-serif';
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillText(`${boss.markedName?.toUpperCase()} IS BEING HUNTED`, w / 2, y);
+      ctx.font = '600 12px system-ui, sans-serif';
+      ctx.fillStyle = '#9aa4b2';
+      ctx.fillText('DAMAGE IT TO PULL IT OFF THEM', w / 2, y + 20);
+    }
+
+    // The rescue bar. Same for both audiences, because the quarry watching it
+    // fill is the other half of the mechanic working.
+    const barW = 260;
+    const barX = (w - barW) / 2;
+    const barY = y + 36;
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    roundRect(ctx, barX, barY, barW, 7, 3);
+    ctx.fill();
+    ctx.fillStyle = ACCENT;
+    roundRect(ctx, barX, barY, Math.max(2, barW * clamp(boss.markBreak, 0, 1)), 7, 3);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /**
+   * A compass arrow to the Overseer, drawn around the reticle whenever it is
+   * hunting you. Deliberately always on rather than only when it is off screen:
+   * the arrow swinging round behind you as it circles is worth more than the
+   * information in it.
+   */
+  private drawMarkCompass(battle: Battle, w: number, h: number): void {
+    const boss = battle.boss;
+    if (!boss || !boss.alive) return;
+
+    const cam = battle.camera.camera;
+    cam.getWorldDirection(this.tmp);
+    const facing = Math.atan2(this.tmp.x, this.tmp.z);
+    const bearing = Math.atan2(boss.position.x - cam.position.x, boss.position.z - cam.position.z);
+    let delta = bearing - facing;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+
+    const radius = Math.min(w, h) * 0.22;
+    const cx = w / 2 + Math.sin(delta) * radius;
+    const cy = h / 2 - Math.cos(delta) * radius;
+
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(delta);
+    ctx.fillStyle = '#f87171';
+    ctx.beginPath();
+    ctx.moveTo(0, -11);
+    ctx.lineTo(8, 8);
+    ctx.lineTo(0, 3);
+    ctx.lineTo(-8, 8);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
