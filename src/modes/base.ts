@@ -47,6 +47,13 @@ export interface BossStatus {
   respawnDelay: number;
   /** True once the boss is berserk, so the HUD can say so. */
   enraged: boolean;
+  /**
+   * Live escalation multipliers on its speed and its damage. Shown rather than
+   * hidden: a boss that is suddenly outrunning you should be a boss you can see
+   * has been given the speed, not one you suspect of cheating.
+   */
+  speedScale: number;
+  damageScale: number;
   /** Ability currently winding up, and how far through the wind-up it is. */
   telegraph: string | null;
   telegraphProgress: number;

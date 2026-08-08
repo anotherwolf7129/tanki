@@ -190,7 +190,7 @@ export class ProjectileSystem {
       // on the spawn spec has always been asking for.
       if (p.spec.trail) {
         arena.fx.tracer(p.previous, p.pos, p.spec.colour, p.spec.radius * 0.75, 0.07);
-        if (p.spec.homing || p.spec.gravity) {
+        if (p.spec.homing || p.spec.gravity || p.spec.smokeTrail) {
           // Missiles and mortar bombs leave exhaust behind them.
           this.smokeTimer -= dt;
           if (this.smokeTimer <= 0) {

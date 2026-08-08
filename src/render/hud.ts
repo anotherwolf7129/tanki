@@ -271,8 +271,15 @@ export class Hud {
     // Berserk is the one phase worth colouring, and it pulses so that it reads
     // as a state the boss is in rather than a label it has always had.
     ctx.fillStyle = boss.enraged ? (Math.sin(time * 8) > 0 ? '#f87171' : '#fbbf24') : '#9aa4b2';
+    // The escalation multipliers ride along with the phase label once they are
+    // doing anything, because "it is suddenly much faster" needs to read as a
+    // rule of the fight rather than as the boss cheating.
+    const escalation =
+      boss.speedScale > 1.01 || boss.damageScale > 1.01
+        ? ` · ×${boss.speedScale.toFixed(2)} SPEED · ×${boss.damageScale.toFixed(2)} DAMAGE`
+        : '';
     ctx.fillText(
-      `PHASE ${boss.phase} · ${boss.phaseName.toUpperCase()}${boss.enraged ? ' · BERSERK' : ''}`,
+      `PHASE ${boss.phase} · ${boss.phaseName.toUpperCase()}${boss.enraged ? ' · BERSERK' : ''}${escalation}`,
       x + 100,
       y - 10,
     );

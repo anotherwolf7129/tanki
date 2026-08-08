@@ -1,3 +1,4 @@
+import { clamp } from '../core/mathx';
 import type { HullDef } from './schema';
 
 /**
@@ -155,20 +156,32 @@ export interface RaidPhase {
   cooldownScale: number;
   /** Shells in a Siege Barrage salvo. */
   shells: number;
+  /** Rocks in a Meteor Storm. */
+  meteors: number;
   /** Rounds the main gun puts downrange per trigger pull. */
   salvo: number;
   /** Fan angle between salvo rounds, in degrees. */
   salvoSpreadDeg: number;
-  /** Berserk: permanently supercharged and running, from here down. */
+  /** Multiplier on hull top speed, turn rate and lateral grip. */
+  speedScale: number;
+  /** Multiplier on everything the boss does to a raider, on top of lethality. */
+  damageScale: number;
+  /** Berserk: permanently supercharged, permanently charging, from here down. */
   enraged?: boolean;
   blurb: string;
 }
 
 /**
- * Phases change tempo and volume, never armour. A boss that quietly gains
- * armour reads as cheating; a boss that shortens its cooldowns, fans three
- * shells out of one barrel and then goes berserk reads as *angry*, and every
- * one of those is still something you can dodge.
+ * Phases change tempo, volume, speed and force — never armour. A boss that
+ * quietly gains armour reads as cheating; a boss that shortens its cooldowns,
+ * fans four shells out of one barrel, hits half again as hard and comes at you
+ * twice as fast reads as *angry*, and every one of those is still something you
+ * can see coming and move away from.
+ *
+ * The escalation is deliberately front-loaded onto the two stats a raider feels
+ * in their hands rather than reads off the HUD: how fast the thing closes, and
+ * how much is left of them when it connects. Everything else — salvo size,
+ * cooldowns, storm density — is dressing on those two.
  *
  * Each gate is crossed exactly once — the boss can never heal back through one
  * — and crossing it slams the raid off it with a pressure wave, so a phase
@@ -181,8 +194,11 @@ export const RAID_PHASES: RaidPhase[] = [
     from: 1,
     cooldownScale: 1,
     shells: 3,
+    meteors: 4,
     salvo: 1,
     salvoSpreadDeg: 0,
+    speedScale: 1,
+    damageScale: 1,
     blurb: 'Holds the middle distance and picks off whoever hurts it most.',
   },
   {
@@ -191,9 +207,12 @@ export const RAID_PHASES: RaidPhase[] = [
     from: 0.66,
     cooldownScale: 0.72,
     shells: 4,
+    meteors: 6,
     salvo: 2,
     salvoSpreadDeg: 4,
-    blurb: 'Two shells a pull, salvos come faster, and cover stops being cover.',
+    speedScale: 1.2,
+    damageScale: 1.15,
+    blurb: 'Two shells a pull, denser storms, and it starts throwing its weight around.',
   },
   {
     index: 3,
@@ -201,8 +220,11 @@ export const RAID_PHASES: RaidPhase[] = [
     from: 0.33,
     cooldownScale: 0.5,
     shells: 6,
+    meteors: 9,
     salvo: 3,
     salvoSpreadDeg: 5.5,
+    speedScale: 1.5,
+    damageScale: 1.4,
     blurb: 'Abilities on a short leash, three shells a pull, and it runs stragglers down.',
   },
   {
@@ -211,10 +233,13 @@ export const RAID_PHASES: RaidPhase[] = [
     from: 0.15,
     cooldownScale: 0.34,
     shells: 7,
+    meteors: 13,
     salvo: 4,
     salvoSpreadDeg: 7,
+    speedScale: 1.85,
+    damageScale: 1.75,
     enraged: true,
-    blurb: 'Berserk. Reloads half again as fast, never stops moving, four shells a pull.',
+    blurb: 'Berserk. Faster and harder-hitting the closer it gets to dying, and it stops managing range entirely.',
   },
 ];
 
@@ -224,8 +249,67 @@ export function phaseFor(healthFraction: number): RaidPhase {
   return phase;
 }
 
-/** Fire-rate multiplier and hull speed the boss keeps once enraged. */
+/**
+ * Berserk is not a switch, it is a slope.
+ *
+ * Inside the last phase the Overseer keeps getting worse the closer it is to
+ * dying: 0 at the top of Wrath, 1 at zero health. A boss that hit its final
+ * form at 15% and then stayed there spends the most dramatic stretch of the
+ * fight standing still, tuning-wise. This is what makes the last sliver of the
+ * bar the part people remember — it is fastest and hardest-hitting in the
+ * seconds before it dies.
+ */
+export function frenzyFor(healthFraction: number): number {
+  const last = RAID_PHASES[RAID_PHASES.length - 1];
+  if (!last.enraged || healthFraction >= last.from) return 0;
+  return clamp(1 - healthFraction / last.from, 0, 1);
+}
+
+/** What full frenzy adds on top of the Wrath phase's own numbers. */
+export const FRENZY_SPEED_BONUS = 0.45;
+export const FRENZY_DAMAGE_BONUS = 0.5;
+export const FRENZY_FIRE_RATE_BONUS = 0.4;
+
+/**
+ * Ceiling on the hull-speed multiplier, Overcharge and all. A six-tonne hull
+ * doing 22 m/s is already a thing you cannot outrun in anything but a light —
+ * past that it stops being frightening and starts being a physics bug.
+ */
+export const BOSS_SPEED_CAP = 2.6;
+
+export function bossSpeedScale(healthFraction: number): number {
+  return phaseFor(healthFraction).speedScale + FRENZY_SPEED_BONUS * frenzyFor(healthFraction);
+}
+
+export function bossDamageScale(healthFraction: number): number {
+  return phaseFor(healthFraction).damageScale + FRENZY_DAMAGE_BONUS * frenzyFor(healthFraction);
+}
+
+/** Fire-rate multiplier the boss keeps once enraged, plus its frenzy ramp. */
 export const ENRAGE_FIRE_RATE = 1.45;
+
+export function bossFireRate(healthFraction: number): number {
+  return ENRAGE_FIRE_RATE + FRENZY_FIRE_RATE_BONUS * frenzyFor(healthFraction);
+}
+
+/**
+ * Ramming. Once it is moving at siege speed the Overseer stops going *around*
+ * raiders, and a six-tonne hull arriving at 15 m/s has to mean something — a
+ * boss that can only hurt you with its gun is a boss you solve by hugging it,
+ * which is precisely the ground its speed increase was meant to take away.
+ */
+export const RAM_FROM_PHASE = 2;
+/** Metres of clearance beyond the two hulls' half-spans that still counts. */
+export const RAM_REACH = 1.6;
+/** Hull speed below which a shunt is just a shunt. */
+export const RAM_MIN_SPEED = 5.5;
+export const RAM_DAMAGE = 260;
+/** Extra damage per metre per second over that, and the window it counts over. */
+export const RAM_SPEED_BONUS = 30;
+export const RAM_SPEED_WINDOW = 8;
+export const RAM_IMPULSE = 22;
+/** Seconds before the same raider can be run over again. */
+export const RAM_COOLDOWN = 1.1;
 /** Blast the boss throws off as it crosses a phase gate, to break the stack on it. */
 export const PHASE_PULSE_RADIUS = 26;
 export const PHASE_PULSE_DAMAGE = 380;
@@ -238,7 +322,7 @@ export function bossHealth(allyCount: number, hullTierMultiplier: number): numbe
 }
 
 export interface BossAbilityDef {
-  id: 'quake' | 'collapse' | 'barrage' | 'overcharge';
+  id: 'quake' | 'meteor' | 'barrage' | 'overcharge';
   displayName: string;
   /** Seconds of visible wind-up before the ability resolves. */
   windup: number;
@@ -255,12 +339,12 @@ export const BOSS_ABILITIES: Record<BossAbilityDef['id'], BossAbilityDef> = {
     cooldown: 17,
     warning: 'OVERSEER is winding up a Quake — get out of the ring',
   },
-  collapse: {
-    id: 'collapse',
-    displayName: 'Structural Collapse',
-    windup: 2.2,
-    cooldown: 24,
-    warning: 'OVERSEER is ranging the structures — get off your cover',
+  meteor: {
+    id: 'meteor',
+    displayName: 'Meteor Storm',
+    windup: 2.4,
+    cooldown: 27,
+    warning: 'OVERSEER IS CALLING DOWN A METEOR STORM — SCATTER',
   },
   barrage: {
     id: 'barrage',
@@ -284,35 +368,61 @@ export const QUAKE_DAMAGE_EDGE = 200;
 export const QUAKE_IMPULSE = 9;
 
 /**
- * Structural Collapse — the Overseer fighting with the map rather than on it.
+ * Meteor Storm — the Overseer stops fighting the raid and starts shelling the
+ * ground the raid is standing on.
  *
- * It ranges the cover the raid is actually using — the block you are hiding
- * behind, the crate you are reloading against, the supply drop everyone
- * converges on — and brings it down on top of you. Several structures at once,
- * each marked through the whole wind-up, so it is always a place you chose to
- * be standing.
+ * Rocks come in off the top of the sky on a steep line, one every third of a
+ * second, walking across wherever it last accounted for somebody. Each one
+ * paints a closing ring on the ground for its whole flight, so every single
+ * impact is a place you had a second and a half to not be standing — and each
+ * one that connects takes a light hull off the map outright.
  *
- * It is the exact inverse of the Siege Barrage: the barrage punishes hiding at
- * range, the collapse punishes hiding *at all*. Between them the only safe
- * ground is open ground, which is where its main gun lives. That is the trap,
- * and it is the reason the boss has an answer to every way a raid stalls.
+ * The part that makes it *the* boss ability rather than a bigger barrage: the
+ * Overseer does not aim these around itself. It is calling ordnance down on
+ * coordinates, and it is standing in the coordinates. It eats a reduced share
+ * of its own storm, which turns the whole ability into a two-way trade — a raid
+ * that holds its nerve and fights *inside* the storm is a raid doing damage the
+ * boss is doing to itself. Running away is safe and slow; standing next to it
+ * while the sky comes down is fast and very nearly suicide. That choice is the
+ * best thirty seconds the mode has.
  *
- * Falling masonry does not care about line of sight, so this resolves without
- * one — being on the wrong side of the cover is not a defence when the cover is
- * what is landing on you.
+ * It replaces Structural Collapse, which asked the same question — where are
+ * you hiding? — and answered it with a prop falling over.
  */
-export const COLLAPSE_RADIUS = 13;
-export const COLLAPSE_DAMAGE_CENTRE = 820;
-export const COLLAPSE_DAMAGE_EDGE = 260;
-export const COLLAPSE_IMPULSE = 16;
-/** How far from a raider a structure can be and still be dropped on them. */
-export const COLLAPSE_REACH = 21;
-/** Largest footprint a prop can have and still count as cover rather than terrain. */
-export const COLLAPSE_MAX_SPAN = 26;
-/** Shortest a prop can be and still be worth collapsing. */
-export const COLLAPSE_MIN_HEIGHT = 1.4;
-/** Structures it will bring down at once, by phase index. */
-export const COLLAPSE_SITES = [2, 3, 4, 5];
+export const METEOR_ALTITUDE = 95;
+/** Entry angle off the horizontal. Steep, but not vertical: a meteor has a line. */
+export const METEOR_ENTRY_DEG = 68;
+export const METEOR_SPEED = 62;
+export const METEOR_INTERVAL = 0.3;
+/** Scatter around the point it aimed at, so a storm walks rather than stacks. */
+export const METEOR_SPREAD = 8;
+/** Straight through a hull. Flat with range — this is not a ranged shot. */
+export const METEOR_DIRECT = 900;
+export const METEOR_SPLASH_RADIUS = 11;
+export const METEOR_SPLASH_MAX = 1150;
+export const METEOR_SPLASH_MIN = 320;
+/**
+ * Enough to throw a light hull off its wheels, and no more. This was 30 and had
+ * to come down: with six to thirteen impacts a storm the raid stopped being
+ * shoved and started being juggled, and a squad that spends the fight airborne
+ * is a squad that never fires. The harness saw the boss surviving at twice the
+ * health it does now for exactly that reason — the knockback was doing more to
+ * the raid's damage output than the damage was.
+ */
+export const METEOR_IMPULSE = 20;
+export const METEOR_SHELL_RADIUS = 0.85;
+/**
+ * The share of its own bombardment the Overseer takes. Armoured against
+ * ordnance it designed, not immune to it.
+ *
+ * A quarter, and that number was measured rather than picked. At a half, a
+ * berserk Overseer — which charges raiders, and therefore charges the ground it
+ * is shelling — was doing as much damage to itself as the whole raid was, and a
+ * boss that mostly suicides is a boss the raid did not beat. At a quarter it is
+ * a real bonus for holding your ground under a storm, and still the occasional
+ * killing blow, without ever being the raid's main source of damage.
+ */
+export const METEOR_SELF_DAMAGE = 0.25;
 
 export const BARRAGE_SPEED = 78;
 export const BARRAGE_GRAVITY = 24;

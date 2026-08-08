@@ -164,6 +164,28 @@ export class Effects {
     this.push(core, 0.35, 'expand', 'additive', 2.4);
   }
 
+  /**
+   * A flat ground ring that closes in on a point over its life — the standard
+   * "something is landing here, in this many seconds" marker. The contraction
+   * *is* the timer: a ring that has shrunk to nothing is a ring you are too late
+   * to walk out of, which is a clearer read than any countdown.
+   */
+  incoming(pos: CANNON.Vec3, colour: number, radius: number, life: number): void {
+    const r = this.take(this.ring, colour, 0.75, 'additive');
+    r.position.set(pos.x, pos.y + 0.15, pos.z);
+    r.rotation.x = -Math.PI / 2;
+    r.scale.setScalar(radius);
+    this.push(r, life, 'expand', 'additive', 0.25);
+
+    // A dim outer ring at the true blast radius, held still, so the marker says
+    // how far out is far enough as well as when.
+    const edge = this.take(this.ring, colour, 0.22, 'additive');
+    edge.position.set(pos.x, pos.y + 0.1, pos.z);
+    edge.rotation.x = -Math.PI / 2;
+    edge.scale.setScalar(radius);
+    this.push(edge, life, 'fade', 'additive');
+  }
+
   damageNumber(pos: CANNON.Vec3, amount: number, colour: string): void {
     if (amount < 1) return;
     this.damageNumbers.push({
