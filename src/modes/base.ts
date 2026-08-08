@@ -1,6 +1,7 @@
 import type * as CANNON from 'cannon-es';
 import type * as THREE from 'three';
 import type { MapDef, ModeCode, TeamId } from '../data/schema';
+import { modeLimit } from '../data/modes';
 import type { Arena, DamageOptions } from '../game/types';
 import type { Tank } from '../entities/tank';
 
@@ -58,7 +59,7 @@ export interface ModeController {
   objectiveFor(bot: Tank, arena: Arena): ObjectiveHint | null;
   teamScores(): Record<'red' | 'blue', number> | null;
   result(elapsed: number, arena: Arena): ModeResult;
-  hudLine(playerTeam: TeamId): string;
+  hudLine(playerTeam: TeamId, arena: Arena): string;
   markers(): MinimapMarker[];
   /**
    * Mode-specific multiplier applied inside the battle's damage funnel. Modes
@@ -92,7 +93,7 @@ export abstract class BaseMode implements ModeController {
     return this.teams ? this.scores : null;
   }
   abstract result(elapsed: number, arena: Arena): ModeResult;
-  abstract hudLine(playerTeam: TeamId): string;
+  abstract hudLine(playerTeam: TeamId, arena: Arena): string;
   markers(): MinimapMarker[] {
     return [];
   }
@@ -106,6 +107,39 @@ export abstract class BaseMode implements ModeController {
     return null;
   }
   dispose(): void {}
+
+  /**
+   * The mode's race-to-a-number, in its own unit, or null when the lobby turned
+   * it off and only the clock can end the battle.
+   */
+  protected limit(arena: Arena): number | null {
+    return modeLimit(arena.settings);
+  }
+
+  /**
+   * `· first to 100` for the HUD strip, empty when there is no limit. The unit
+   * is left off deliberately — the number it is chasing is already on the same
+   * line, and the top bar is only 300 px wide.
+   */
+  protected limitLine(arena: Arena): string {
+    const limit = this.limit(arena);
+    return limit == null ? '' : `  ·  first to ${limit}`;
+  }
+
+  /**
+   * Whichever team reached the limit first, if either has. Every team mode
+   * races on `scores`; only the unit printed in the result differs.
+   */
+  protected teamLimitReached(arena: Arena, unit: string): ModeResult | null {
+    const limit = this.limit(arena);
+    if (limit == null) return null;
+    for (const team of ['red', 'blue'] as const) {
+      if (this.scores[team] >= limit) {
+        return { over: true, winner: team === 'red' ? 'Red' : 'Blue', reason: `${limit} ${unit}` };
+      }
+    }
+    return null;
+  }
 
   protected timeUp(elapsed: number, arena: Arena): ModeResult | null {
     if (elapsed < arena.settings.timeLimit) return null;

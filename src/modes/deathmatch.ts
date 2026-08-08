@@ -36,7 +36,7 @@ export class DeathmatchMode extends BaseMode {
   }
 
   result(elapsed: number, arena: Arena): ModeResult {
-    const limit = arena.settings.killLimit;
+    const limit = this.limit(arena);
     if (limit != null) {
       const leader = arena.tanks.reduce((a, b) => (b.kills > a.kills ? b : a), arena.tanks[0]);
       if (leader && leader.kills >= limit) {
@@ -46,7 +46,7 @@ export class DeathmatchMode extends BaseMode {
     return this.timeUp(elapsed, arena) ?? { over: false };
   }
 
-  hudLine(_playerTeam: TeamId): string {
-    return 'Free for all';
+  hudLine(_playerTeam: TeamId, arena: Arena): string {
+    return `Free for all${this.limitLine(arena)}`;
   }
 }

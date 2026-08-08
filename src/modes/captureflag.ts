@@ -239,21 +239,13 @@ export class CaptureFlagMode extends BaseMode {
   }
 
   result(elapsed: number, arena: Arena): ModeResult {
-    const limit = arena.settings.flagLimit;
-    if (limit != null) {
-      for (const team of ['red', 'blue'] as const) {
-        if (this.scores[team] >= limit) {
-          return { over: true, winner: team === 'red' ? 'Red' : 'Blue', reason: `${limit} flags` };
-        }
-      }
-    }
-    return this.timeUp(elapsed, arena) ?? { over: false };
+    return this.teamLimitReached(arena, 'flags') ?? this.timeUp(elapsed, arena) ?? { over: false };
   }
 
-  hudLine(playerTeam: TeamId): string {
+  hudLine(playerTeam: TeamId, arena: Arena): string {
     const mine = playerTeam === 'blue' ? this.scores.blue : this.scores.red;
     const theirs = playerTeam === 'blue' ? this.scores.red : this.scores.blue;
-    return `Flags ${mine} — ${theirs}`;
+    return `Flags ${mine} — ${theirs}${this.limitLine(arena)}`;
   }
 
   override markers(): MinimapMarker[] {

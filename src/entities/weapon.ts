@@ -1,5 +1,5 @@
 import * as CANNON from 'cannon-es';
-import type { TurretDef } from '../data/schema';
+import type { SplashDef, TurretDef } from '../data/schema';
 import { clamp, DEG } from '../core/mathx';
 import { SHOT_MASK } from '../physics/world';
 import type { Arena } from '../game/types';
@@ -249,6 +249,7 @@ export class Weapon {
       speed: this.def.projectileSpeed ?? 220,
       impactForce: this.def.impactForce,
       recoil: this.def.recoil,
+      splash: this.def.splash,
       lateralOffset: offset,
     });
     this.cooldown = this.currentReloadTime();
@@ -265,6 +266,7 @@ export class Weapon {
           speed: this.def.projectileSpeed ?? 500,
           impactForce: this.def.impactForce,
           recoil: this.def.recoil,
+          splash: this.def.splash,
           spreadDeg: 0.7,
         });
         this.cooldown = this.currentReloadTime();
@@ -289,11 +291,16 @@ export class Weapon {
     if (!intent.fire || this.cooldown > 0) return;
 
     if (this.def.pellets) {
+      // A pellet carries its share of the blast, not the whole one: eight
+      // full-strength detonations from one trigger pull would make a splash
+      // shotgun the strongest gun in the game by an order of magnitude.
+      const share = resolveSplash(this.def.splash, this.def.damage, 1 / this.def.pellets.count);
       for (let i = 0; i < this.def.pellets.count; i++) {
         this.fireShell(arena, this.def.damage, this.def.weakDamage, {
           speed: this.def.projectileSpeed ?? 300,
           impactForce: this.def.impactForce / this.def.pellets.count,
           recoil: i === 0 ? this.def.recoil : 0,
+          splash: share,
           spreadDeg: this.def.pellets.spreadDeg,
           radius: 0.12,
           skipMuzzleFlash: i > 0,
@@ -304,6 +311,7 @@ export class Weapon {
         speed: this.def.projectileSpeed ?? 260,
         impactForce: this.def.impactForce,
         recoil: this.def.recoil,
+        splash: this.def.splash,
         bounces: this.def.bounces,
       });
     }
@@ -470,6 +478,7 @@ export class Weapon {
         speed: this.def.projectileSpeed ?? 420,
         impactForce: this.def.impactForce,
         recoil: this.def.recoil,
+        splash: this.def.splash,
       });
       this.cooldown = this.currentReloadTime();
     }
@@ -719,7 +728,10 @@ export class Weapon {
       radius: opts.radius ?? 0.22,
       gravity: opts.gravity,
       bounces: opts.bounces,
-      splash: opts.splash ?? undefined,
+      // Resolved here rather than in the projectile so the blast obeys the same
+      // multipliers as the direct hit — Double Damage used to leave the splash
+      // half of a Thunder shell at base strength.
+      splash: resolveSplash(opts.splash, damage, scale),
       homing: opts.homing,
       critical,
       maxLife: opts.maxLife,
@@ -729,6 +741,28 @@ export class Weapon {
     if (!opts.skipMuzzleFlash) arena.fx.muzzleFlash(pos, dir, this.colour);
     this.applyRecoil(opts.recoil);
     this.firingRecently = 0.25;
+  }
+
+  /**
+   * Area damage for the firing modes that resolve on the spot rather than
+   * through a shell — hitscan impacts. Shell-borne blasts are detonated by the
+   * projectile itself, which is what carries the flight time and the bounce.
+   */
+  private detonateSplash(
+    arena: Arena,
+    point: CANNON.Vec3,
+    damage: number,
+    scale: number,
+    impactForce: number,
+  ): void {
+    const splash = resolveSplash(this.def.splash, damage, scale);
+    if (!splash) return;
+    arena.splash(point, splash.radius, splash.damageMax, splash.damageMin, this.owner, {
+      selfDamage: this.def.selfDamage,
+      impactForce: impactForce * 0.6,
+      turret: this.def,
+    });
+    arena.fx.explosion(point, splash.radius, this.colour);
   }
 
   /** Instant beam. Pierces when the turret declares it (Railgun). */
@@ -754,6 +788,7 @@ export class Weapon {
       const target = arena.tankForBody(hit.body);
       if (!target) {
         end = hit.point;
+        this.detonateSplash(arena, hit.point, damage, scale * falloff, impactForce);
         break;
       }
       if (target === this.owner) continue;
@@ -764,6 +799,9 @@ export class Weapon {
       arena.damage(target, dmg, this.owner, { kind: 'direct', at: hit.point });
       target.vehicle.applyImpulse(dir, impactForce);
       arena.fx.impact(hit.point, hit.normal, this.colour);
+      // A pierced target is a detonation point too, so a hitscan gun with a
+      // blast stitches one along the beam instead of only at the far end.
+      this.detonateSplash(arena, hit.point, damage, scale * falloff, impactForce);
 
       remaining -= 1;
       falloff *= 1 - (pierce?.damageLossPerTarget ?? 0);
@@ -835,6 +873,28 @@ export class Weapon {
     }
     return true;
   }
+}
+
+/** A blast whose centre damage has been settled, not left to a fallback. */
+type ResolvedSplash = SplashDef & { damageMax: number };
+
+/**
+ * Pins down a blast before it leaves the gun: `damageMax` is optional in the
+ * data and falls back to the turret's direct damage, and both ends of the
+ * falloff take the shooter's damage multipliers. Returns a definition whose
+ * `damageMax` is always populated, so nothing downstream has to re-guess it.
+ */
+function resolveSplash(
+  splash: TurretDef['splash'],
+  damage: number,
+  scale: number,
+): ResolvedSplash | undefined {
+  if (!splash) return undefined;
+  return {
+    radius: splash.radius,
+    damageMax: (splash.damageMax ?? damage) * scale,
+    damageMin: splash.damageMin * scale,
+  };
 }
 
 function applySpread(dir: CANNON.Vec3, degrees: number): void {

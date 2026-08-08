@@ -5,11 +5,31 @@ export interface ModeDef {
   displayName: string;
   teams: boolean;
   blurb: string;
-  /** Default win condition; overridable from the battle setup screen. */
-  scoreLimit: number | null;
-  killLimit: number | null;
-  flagLimit: number | null;
+  /**
+   * The mode's race-to-a-number win condition, or null for modes that only end
+   * on the clock. Every mode counts something different — kills, flags, held
+   * points — so this describes what it counts as well as the default value, and
+   * the battle setup screen builds its slider from it.
+   */
+  limit: LimitSpec | null;
   timeLimit: number;
+}
+
+/**
+ * A mode's win condition as a tunable. `max` is deliberately generous: the
+ * default is a suggestion, and a lobby that wants a marathon should be able to
+ * ask for one without editing the source.
+ */
+export interface LimitSpec {
+  /** What the number counts, e.g. "kills". Used in the setup screen and HUD. */
+  unit: string;
+  /** Full label for the setup screen, e.g. "Team kill limit". */
+  label: string;
+  /** One line explaining whose total is being counted. */
+  hint: string;
+  value: number;
+  max: number;
+  step: number;
 }
 
 export const MODES: Record<ModeCode, ModeDef> = {
@@ -18,9 +38,14 @@ export const MODES: Record<ModeCode, ModeDef> = {
     displayName: 'Deathmatch',
     teams: false,
     blurb: 'No teams. Only the killer scores. Highest gold box frequency.',
-    scoreLimit: null,
-    killLimit: null,
-    flagLimit: null,
+    limit: {
+      unit: 'kills',
+      label: 'Kill limit',
+      hint: 'One player has to reach it alone, so it counts far slower than a team total.',
+      value: 30,
+      max: 100,
+      step: 5,
+    },
     timeLimit: 15 * 60,
   },
   TDM: {
@@ -28,9 +53,16 @@ export const MODES: Record<ModeCode, ModeDef> = {
     displayName: 'Team Deathmatch',
     teams: true,
     blurb: 'Red against Blue. Most kills wins.',
-    scoreLimit: null,
-    killLimit: null,
-    flagLimit: null,
+    limit: {
+      unit: 'kills',
+      label: 'Team kill limit',
+      // Ten tanks trading kills bank a combined 30 in about three minutes,
+      // which is why the old shared default ended a TDM before it started.
+      hint: 'Counts one whole team’s kills, so it fills roughly as fast as the lobby is large.',
+      value: 100,
+      max: 400,
+      step: 10,
+    },
     timeLimit: 15 * 60,
   },
   CTF: {
@@ -38,9 +70,14 @@ export const MODES: Record<ModeCode, ModeDef> = {
     displayName: 'Capture the Flag',
     teams: true,
     blurb: 'Take the enemy flag home. Your own flag must be on its platform to score.',
-    scoreLimit: null,
-    killLimit: null,
-    flagLimit: null,
+    limit: {
+      unit: 'flags',
+      label: 'Flag limit',
+      hint: 'Deliveries by one team. Kills never end a CTF battle.',
+      value: 5,
+      max: 30,
+      step: 1,
+    },
     timeLimit: 15 * 60,
   },
   CP: {
@@ -48,9 +85,14 @@ export const MODES: Record<ModeCode, ModeDef> = {
     displayName: 'Control Points',
     teams: true,
     blurb: 'Hold the glowing platforms. Captured points accrue score continuously.',
-    scoreLimit: null,
-    killLimit: null,
-    flagLimit: null,
+    limit: {
+      unit: 'points',
+      label: 'Score limit',
+      hint: 'Team score, accruing continuously from every platform you hold.',
+      value: 600,
+      max: 3000,
+      step: 100,
+    },
     timeLimit: 15 * 60,
   },
   RAID: {
@@ -59,9 +101,9 @@ export const MODES: Record<ModeCode, ModeDef> = {
     teams: true,
     blurb:
       'You and a squad against one enormous, genuinely clever tank. You out-damage your squadmates — which is exactly what pulls its attention onto you.',
-    scoreLimit: null,
-    killLimit: null,
-    flagLimit: null,
+    // A raid ends when the Overseer or the reinforcement pool does. There is
+    // nothing to race to.
+    limit: null,
     timeLimit: 12 * 60,
   },
 };
@@ -74,12 +116,29 @@ export interface BattleSettings {
   botCount: number;
   difficulty: string;
   timeLimit: number;
-  killLimit: number | null;
-  flagLimit: number | null;
-  scoreLimit: number | null;
+  /**
+   * Win condition per mode, in that mode's own unit, or null for "clock only".
+   * Kept per mode rather than as one shared number because 30 is a long
+   * Deathmatch and a three-minute Team Deathmatch — the same field serving both
+   * is what made TDM end before anyone had left their spawn.
+   */
+  limits: Record<ModeCode, number | null>;
   friendlyFire: boolean;
   suppliesEnabled: boolean;
   goldBoxEnabled: boolean;
+}
+
+/** The default race-to-a-number for every mode, straight from `MODES`. */
+export function defaultLimits(): Record<ModeCode, number | null> {
+  const out = {} as Record<ModeCode, number | null>;
+  for (const code of MODE_CODES) out[code] = MODES[code].limit?.value ?? null;
+  return out;
+}
+
+/** The active mode's win condition, or null when only the clock ends it. */
+export function modeLimit(settings: BattleSettings): number | null {
+  const limit = settings.limits?.[settings.mode];
+  return limit != null && limit > 0 ? limit : null;
 }
 
 export const DEFAULT_SETTINGS: BattleSettings = {
@@ -88,9 +147,7 @@ export const DEFAULT_SETTINGS: BattleSettings = {
   botCount: 9,
   difficulty: 'standard',
   timeLimit: 8 * 60,
-  killLimit: 30,
-  flagLimit: 5,
-  scoreLimit: 600,
+  limits: defaultLimits(),
   friendlyFire: false,
   suppliesEnabled: true,
   goldBoxEnabled: true,

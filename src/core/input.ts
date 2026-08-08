@@ -1,7 +1,13 @@
 export interface InputState {
   forward: number;
+  /**
+   * Hull steering as a yaw rate, in the engine's convention rather than the
+   * screen's: world yaw grows anti-clockwise seen from above, which is a *left*
+   * turn behind the chase camera. So the left-hand keys sit at the positive end
+   * of this axis, exactly like the values the bots hand the vehicle.
+   */
   turn: number;
-  /** Turret slew request, -1 left … 1 right. Rate is applied by the battle. */
+  /** Turret slew request, same yaw convention as `turn`: positive is left. */
   turretTurn: number;
   /** Snap the turret back to the hull's forward direction. Edge triggered. */
   centreTurret: boolean;
@@ -78,8 +84,11 @@ export class Input {
       (pos.some((c) => k.has(c)) ? 1 : 0) - (neg.some((c) => k.has(c)) ? 1 : 0);
 
     s.forward = axis(['ArrowUp', 'KeyW'], ['ArrowDown', 'KeyS']);
-    s.turn = axis(['ArrowRight', 'KeyD'], ['ArrowLeft', 'KeyA']);
-    s.turretTurn = axis(['KeyX'], ['KeyZ']);
+    // Left keys are the positive end: see the note on `turn`. Reading these two
+    // lines as "backwards" is the trap — swapping them steers the hull and the
+    // turret away from the key you pressed.
+    s.turn = axis(['ArrowLeft', 'KeyA'], ['ArrowRight', 'KeyD']);
+    s.turretTurn = axis(['KeyZ'], ['KeyX']);
     s.zoom = axis(['Minus', 'NumpadSubtract'], ['Equal', 'NumpadAdd']);
     s.fire = k.has('Space');
     s.overdrive = k.has('KeyQ');
