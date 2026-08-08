@@ -119,7 +119,12 @@ export class Menu {
 
             <label>Turret
               <select id="turret" ${hull.fixedTurret ? 'disabled' : ''}>
-                ${TURRET_IDS.filter((id) => TURRETS[id].purchasable !== false)
+                ${TURRET_IDS.filter(
+                  // A hull with a fixed turret mounts one that is not otherwise
+                  // purchasable, so it has to be listed too — otherwise the
+                  // disabled select shows the wrong gun's name.
+                  (id) => TURRETS[id].purchasable !== false || id === loadout.turret,
+                )
                   .map(
                     (id) =>
                       `<option value="${id}" ${id === loadout.turret ? 'selected' : ''}>${TURRETS[id].displayName} — ${TURRETS[id].class}</option>`,
@@ -232,7 +237,12 @@ export class Menu {
     q<HTMLSelectElement>('#hull').addEventListener('change', (e) => {
       loadout.hull = (e.target as HTMLSelectElement).value;
       const fixed = HULLS[loadout.hull].fixedTurret;
-      if (fixed) loadout.turret = fixed;
+      if (fixed) {
+        loadout.turret = fixed;
+      } else if (TURRETS[loadout.turret]?.purchasable === false) {
+        // Leaving a fixed-turret hull must not carry its unbuyable gun along.
+        loadout.turret = TURRET_IDS.find((id) => TURRETS[id].purchasable !== false) ?? 'smoky';
+      }
       this.persistAndRender();
     });
     q<HTMLSelectElement>('#turret').addEventListener('change', (e) => {

@@ -134,6 +134,37 @@ never made weak or passive, only *slow* and *imprecise*.
 Four presets ship — Recruit, Standard, Veteran, Nightmare — with the advantage shrinking to zero at
 the top. Every knob is visible in the garage's "Your edge" panel.
 
+## Presentation
+
+No image or model assets ship with the project — every surface is a canvas texture drawn from code in
+`src/render/textures.ts`, and every shape is a three.js primitive.
+
+**Tank construction** (`src/render/tankmesh.ts`). A hull is authored as ~150 primitives: a tub with a
+sloped glacis, a chamfered fighting compartment, a louvred engine deck with exhaust stacks, a closed
+track loop with sprockets, idlers, road wheels and return rollers, then hatches, optics, handrails,
+tow shackles, stowage bins and spare track links. The turret gets a mantlet, cupola, vision-block
+ring, smoke launchers and a rear basket; each firing archetype gets its own gun, from a rifled barrel
+with a bore evacuator to a six-tube minigun cluster to a railgun's twin rails.
+
+Those pieces are transformed into place and then **merged into one geometry per material bucket**, so
+a tank costs about ten draw calls rather than a hundred and fifty. The merged result is cached by
+hull, turret and role, which means a twelve-bot battle uploads each silhouette exactly once.
+Silhouette rules vary by hull class — wheel count, hull taper, deck height, turret facets — so a
+Mammoth reads as a Mammoth at distance.
+
+**Reading the battlefield.** Barrels are modelled to exactly the distance shots leave from
+(`barrelReach` in `src/data/index.ts` is the single source of truth), so muzzle flashes sit on the end
+of the gun. Tracks scroll with ground speed, the gun recoils in its mantlet on every shot, and a hull
+below a third health trails engine fire and a smoke column — which doubles as target-priority
+information for both sides.
+
+**Paint and protection.** Team paint is one greyscale plate sheet tinted per side, with disruptive
+camo for bots. The player's tank is deliberately the odd one out: a hand-painted two-tone scheme with
+chevroned identification flashes, a bolt-on protection package — reactive armour bricks across the
+glacis and turret cheeks, spaced slat armour outboard of the skirts, a slat cage over the stowage
+basket — a commander's aerial and pennant, and a faint ground ring in its accent colour. The gap the
+difficulty profile grants you in the stat block is something you can see on the model.
+
 ## Layout
 
 ```
@@ -143,7 +174,7 @@ src/
   entities/  tank, weapon, projectile, pickup, status
   data/      turrets.json, hulls.json, maps/, supplies, modes, difficulty
   ai/        navgrid, perception, behaviour tree, personas, team board
-  render/    scene, materials, tank meshes, effects, camera, HUD
+  render/    scene, procedural textures, materials, tank meshes, effects, camera, HUD
   modes/     dm, tdm, ctf, cp
   game/      battle orchestration, overdrives
   ui/        garage and battle setup
@@ -176,4 +207,5 @@ the wiki verbatim so the tables read the way the documentation does.
 
 Game mechanics, stat systems and mode rules are not copyrightable. Names, logos, models, textures
 and map art are. Everything here is original geometry built from primitives, and the turret and hull
-names are the only borrowed strings — a rename is a find-and-replace in two JSON files.
+names are the only borrowed strings — a rename is a find-and-replace in two JSON files. Every texture
+in the game is drawn procedurally at load time; no image files are shipped or fetched.

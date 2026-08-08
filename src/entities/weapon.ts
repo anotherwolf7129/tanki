@@ -96,6 +96,11 @@ export class Weapon {
     this.volleyRemaining = 0;
     this.beamTarget = null;
     this.scopedActive = false;
+    // Tick accumulators carry over into the next life otherwise, which lets a
+    // respawned sustained-fire turret land a free tick the instant it opens up.
+    this.tickAccum = 0;
+    this.firingRecently = 0;
+    this.barrel = 0;
     this.intent.fire = false;
     this.intent.alt = false;
     this.intent.scope = false;
@@ -658,6 +663,9 @@ export class Weapon {
   }
 
   private applyRecoil(magnitude: number): void {
+    // The gun always kicks visually, even for turrets whose recoil impulse on
+    // the hull is zero — a shot with no movement at the muzzle reads as a bug.
+    this.owner.onFired(magnitude);
     if (magnitude <= 0) return;
     const dir = this.owner.aimDirection(new CANNON.Vec3()).negate();
     this.owner.vehicle.applyImpulse(dir, magnitude);

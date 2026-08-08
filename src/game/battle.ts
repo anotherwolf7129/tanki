@@ -19,6 +19,7 @@ import { PhysicsWorld, WORLD_MASK } from '../physics/world';
 import { ChaseCamera } from '../render/camera';
 import { Effects } from '../render/effects';
 import { createScene, type SceneBundle } from '../render/scene';
+import { pruneChassisCache } from '../render/tankmesh';
 import { CaptureFlagMode } from '../modes/captureflag';
 import { ControlPointsMode } from '../modes/controlpoints';
 import { DeathmatchMode } from '../modes/deathmatch';
@@ -701,6 +702,9 @@ export class Battle implements Arena {
     this.mode.dispose();
     this.fx.dispose();
     this.bundle.dispose();
+    // Every tank mesh is gone, so it is safe to drop shared silhouettes if the
+    // garage has been cycled enough times to make the cache worth reclaiming.
+    pruneChassisCache();
   }
 }
 

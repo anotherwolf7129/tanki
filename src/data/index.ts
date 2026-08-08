@@ -42,6 +42,26 @@ export function pitchLimits(t: TurretDef): [number, number] {
 }
 
 /**
+ * Distance from the turret ring to the muzzle, in metres.
+ *
+ * Both the renderer and the simulation read this: the barrel is modelled to
+ * exactly this length, and shots, muzzle flashes and line-of-sight probes all
+ * start from its tip. Keeping one number means a Railgun's tracer leaves the
+ * end of a Railgun barrel rather than somewhere inside it.
+ */
+export function barrelReach(h: HullDef, t: TurretDef): number {
+  const base = h.size[2] * 0.55 + 1.2;
+  switch (t.class) {
+    case 'short-range':
+      return base * 0.8;
+    case 'medium-range':
+      return base;
+    default:
+      return base * 1.2;
+  }
+}
+
+/**
  * Preferred engagement band for a turret, in metres. Bots use this to decide
  * how close to close. Derived from the range table rather than hand-authored so
  * new turrets pick up sensible behaviour for free.
