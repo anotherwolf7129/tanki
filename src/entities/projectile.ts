@@ -16,6 +16,8 @@ export class Projectile {
   readonly spec: ProjectileSpawn;
   readonly pos: CANNON.Vec3;
   readonly vel: CANNON.Vec3;
+  /** Position at the start of this step, so the renderer can draw a streak. */
+  readonly previous: CANNON.Vec3;
   alive = true;
   travelled = 0;
   private life: number;
@@ -25,6 +27,7 @@ export class Projectile {
   constructor(spec: ProjectileSpawn) {
     this.spec = spec;
     this.pos = spec.position.clone();
+    this.previous = spec.position.clone();
     this.vel = spec.direction.clone();
     this.vel.normalize();
     this.vel.scale(spec.speed, this.vel);
@@ -34,6 +37,7 @@ export class Projectile {
   }
 
   update(dt: number, arena: Arena): void {
+    this.previous.copy(this.pos);
     this.life -= dt;
     if (this.life <= 0) {
       this.detonate(arena, this.pos.clone(), new CANNON.Vec3(0, 1, 0), null);
@@ -180,8 +184,25 @@ export class ProjectileSystem {
         continue;
       }
       if (mesh) mesh.position.set(p.pos.x, p.pos.y, p.pos.z);
+      // A shell moving at 400 m/s covers seven metres a frame, so a bare sphere
+      // reads as a stutter of dots. The streak between last frame's position and
+      // this one is what makes a shot legible — and it is what the `trail` flag
+      // on the spawn spec has always been asking for.
+      if (p.spec.trail) {
+        arena.fx.tracer(p.previous, p.pos, p.spec.colour, p.spec.radius * 0.75, 0.07);
+        if (p.spec.homing || p.spec.gravity) {
+          // Missiles and mortar bombs leave exhaust behind them.
+          this.smokeTimer -= dt;
+          if (this.smokeTimer <= 0) {
+            this.smokeTimer = 0.045;
+            arena.fx.smoke(p.pos, 0.3, 0.55, { x: 0, y: 1.4, z: 0 });
+          }
+        }
+      }
     }
   }
+
+  private smokeTimer = 0;
 
   get count(): number {
     return this.list.length;

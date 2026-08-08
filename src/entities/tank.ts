@@ -2,7 +2,7 @@ import * as CANNON from 'cannon-es';
 import * as THREE from 'three';
 import type { HullDef, SupplyKind, TeamId, TurretDef } from '../data/schema';
 import { CROSS_COOLDOWN, SELF_COOLDOWN, SUPPLIES, SUPPLY_ORDER, crossCooldownApplies } from '../data/supplies';
-import { pitchLimits } from '../data';
+import { barrelReach, pitchLimits } from '../data';
 import { angleDelta, clamp, DEG } from '../core/mathx';
 import { VehicleController } from '../physics/vehicle';
 import type { PhysicsWorld } from '../physics/world';
@@ -11,6 +11,9 @@ import { Weapon } from './weapon';
 import { buildTankMesh, type TankMesh } from '../render/tankmesh';
 import type { Arena } from '../game/types';
 import type { BotController } from '../ai/bot';
+
+const TMP_FWD = new CANNON.Vec3();
+const TMP_SMOKE = new CANNON.Vec3();
 
 export interface TankConfig {
   id: number;
@@ -76,6 +79,7 @@ export class Tank {
   };
   private healOverTime = 0;
   private healRemaining = 0;
+  private smokeTimer = 0;
 
   kills = 0;
   deaths = 0;
@@ -168,8 +172,7 @@ export class Tank {
   muzzle(out = new CANNON.Vec3()): CANNON.Vec3 {
     const origin = this.turretOrigin(out);
     const dir = this.aimDirection(new CANNON.Vec3());
-    const len = this.hull.size[2] * 0.55 + 1.2;
-    origin.vadd(dir.scale(len), origin);
+    origin.vadd(dir.scale(barrelReach(this.hull, this.turretDef)), origin);
     return origin;
   }
 
@@ -240,7 +243,36 @@ export class Tank {
 
     this.updateAim(dt);
     this.weapon.update(dt, arena);
+    this.updateVisuals(dt, arena);
     this.syncMesh();
+  }
+
+  /**
+   * Cosmetic state: track scroll, gun recoil recovery, and the engine fire and
+   * smoke column a badly hurt hull trails. The smoke doubles as information —
+   * a burning tank is one worth chasing, from either side of the fight.
+   */
+  private updateVisuals(dt: number, arena: Arena): void {
+    const along = this.vehicle.forwardVector(TMP_FWD);
+    const speedAlong = this.velocity.x * along.x + this.velocity.y * along.y + this.velocity.z * along.z;
+    this.mesh.animate(dt, speedAlong);
+    this.mesh.setHealth(this.healthFraction);
+
+    if (this.healthFraction < 0.34) {
+      this.smokeTimer -= dt;
+      if (this.smokeTimer <= 0) {
+        this.smokeTimer = 0.1 + this.healthFraction * 0.5;
+        TMP_SMOKE.copy(this.position);
+        TMP_SMOKE.y += this.hull.size[1] * 0.7;
+        TMP_SMOKE.z -= this.hull.size[2] * 0.2;
+        arena.fx.smoke(TMP_SMOKE, this.hull.size[0] * 0.3, 1.1, { x: 0, y: 3.2, z: 0 });
+      }
+    }
+  }
+
+  /** Called by the weapon when it fires, so the gun kicks in its mantlet. */
+  onFired(recoil: number): void {
+    this.mesh.kick(0.16 + Math.min(0.34, recoil * 0.09));
   }
 
   /** Battle points feed the overdrive bar as well as the scoreboard. */
@@ -326,6 +358,12 @@ export class Tank {
     this.desiredYaw = spawn.yaw;
     this.turretPitch = 0;
     this.turretYawVel = 0;
+    this.smokeTimer = 0;
+    // Overlays are cleared here rather than left to the next weapon tick: a
+    // tank killed mid-flamethrower is respawned before its weapon updates
+    // again, and would otherwise reappear for a frame still spraying fire.
+    this.mesh.resetOverlays();
+    this.mesh.setHealth(1);
     this.mesh.root.visible = true;
     this.syncMesh();
   }
@@ -336,6 +374,7 @@ export class Tank {
     this.health = 0;
     this.status.clear();
     this.carryingFlag = null;
+    this.mesh.resetOverlays();
     this.mesh.root.visible = false;
     this.vehicle.body.velocity.setZero();
     this.vehicle.body.angularVelocity.setZero();

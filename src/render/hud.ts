@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SUPPLIES, SUPPLY_ORDER } from '../data/supplies';
+import { SELF_COOLDOWN, SUPPLIES, SUPPLY_ORDER } from '../data/supplies';
 import { clamp } from '../core/mathx';
 import type { Battle, BattleSnapshot } from '../game/battle';
 
@@ -362,7 +362,7 @@ export class Hud {
 
       if (state.cooldown > 0) {
         ctx.fillStyle = 'rgba(8,10,14,0.66)';
-        const frac = clamp(state.cooldown / 20, 0, 1);
+        const frac = clamp(state.cooldown / SELF_COOLDOWN, 0, 1);
         roundRect(ctx, x, y, size, size * frac, 8);
         ctx.fill();
         ctx.fillStyle = '#e6edf5';

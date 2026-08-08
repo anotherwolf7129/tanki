@@ -21,7 +21,9 @@ const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, po
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// PCFSoftShadowMap is deprecated in current three and silently downgrades to
+// PCFShadowMap while logging a warning every session; ask for what we get.
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 

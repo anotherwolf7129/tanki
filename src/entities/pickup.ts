@@ -39,7 +39,15 @@ export class PickupSystem {
 
   private readonly boxGeo = new THREE.BoxGeometry(2, 2, 2);
   private readonly goldGeo = new THREE.BoxGeometry(3, 3, 3);
+  private readonly frameGeo = new THREE.TorusGeometry(1.5, 0.12, 6, 4);
+  // Halos used to be built per box and never freed, which leaked a geometry and
+  // a material every time a supply zone respawned — one shared pair each.
+  private readonly haloGeo = new THREE.RingGeometry(1.8, 2.2, 24);
+  private readonly goldHaloGeo = new THREE.RingGeometry(2.6, 3.2, 28);
+  private readonly beaconGeo = new THREE.CylinderGeometry(2.6, 2.6, 60, 18, 1, true);
   private readonly materials = new Map<number, THREE.MeshStandardMaterial>();
+  private readonly haloMaterials = new Map<number, THREE.MeshBasicMaterial>();
+  private readonly beaconMaterial: THREE.MeshBasicMaterial;
 
   constructor(
     private readonly scene: THREE.Scene,
@@ -52,6 +60,26 @@ export class PickupSystem {
     const range = isDeathmatch ? GOLD_INTERVAL_DM : GOLD_INTERVAL_OTHER;
     this.goldTimer = goldEnabled && def.goldBoxZones.length ? randRange(range[0] * 0.5, range[1] * 0.7) : Infinity;
     this.goldRange = range;
+
+    // The landing marker used to be an empty Object3D, so the warning that a
+    // Gold Box was inbound pointed at nothing you could actually see in the
+    // world. It is now a column of light standing on the drop zone.
+    this.beaconMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffd700,
+      transparent: true,
+      opacity: 0.16,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    });
+    const column = new THREE.Mesh(this.beaconGeo, this.beaconMaterial);
+    column.position.y = 30;
+    const pad = new THREE.Mesh(this.goldHaloGeo, this.beaconMaterial);
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.y = 0.15;
+    this.goldMarker.add(column, pad);
+    this.goldMarker.visible = false;
     scene.add(this.goldMarker);
   }
 
@@ -80,6 +108,11 @@ export class PickupSystem {
   }
 
   private updateGold(dt: number, arena: Arena): void {
+    if (this.goldMarker.visible) {
+      // Beats faster as the drop gets closer, so the warning has urgency.
+      const urgency = 1 + (GOLD_WARNING - Math.max(0, this.goldTimer)) * 1.2;
+      this.beaconMaterial.opacity = 0.1 + Math.abs(Math.sin(arena.time * urgency * 2.2)) * 0.2;
+    }
     if (!isFinite(this.goldTimer)) return;
     this.goldTimer -= dt;
     if (!this.goldWarned && this.goldTimer <= GOLD_WARNING) {
@@ -160,10 +193,13 @@ export class PickupSystem {
     mesh.castShadow = true;
     mesh.position.set(pos.x, pos.y, pos.z);
 
-    const halo = new THREE.Mesh(
-      new THREE.RingGeometry(gold ? 2.6 : 1.8, gold ? 3.2 : 2.2, 20),
-      new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity: 0.55, side: THREE.DoubleSide }),
-    );
+    // Corner frame, so a box reads as a crate rather than a coloured cube.
+    const frame = new THREE.Mesh(this.frameGeo, this.material(colour));
+    frame.scale.setScalar(gold ? 1.42 : 0.95);
+    frame.rotation.set(Math.PI / 4, Math.PI / 4, 0);
+    mesh.add(frame);
+
+    const halo = new THREE.Mesh(gold ? this.goldHaloGeo : this.haloGeo, this.haloMaterial(colour));
     halo.rotation.x = -Math.PI / 2;
     halo.position.y = -0.9;
     mesh.add(halo);
@@ -226,13 +262,36 @@ export class PickupSystem {
     return m;
   }
 
+  private haloMaterial(colour: number): THREE.MeshBasicMaterial {
+    let m = this.haloMaterials.get(colour);
+    if (!m) {
+      m = new THREE.MeshBasicMaterial({
+        color: colour,
+        transparent: true,
+        opacity: 0.5,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      this.haloMaterials.set(colour, m);
+    }
+    return m;
+  }
+
   dispose(): void {
     for (const p of this.pickups) this.scene.remove(p.mesh);
     this.pickups.length = 0;
+    this.goldMarker.clear();
     this.scene.remove(this.goldMarker);
     this.boxGeo.dispose();
     this.goldGeo.dispose();
+    this.frameGeo.dispose();
+    this.haloGeo.dispose();
+    this.goldHaloGeo.dispose();
+    this.beaconGeo.dispose();
+    this.beaconMaterial.dispose();
     for (const m of this.materials.values()) m.dispose();
+    for (const m of this.haloMaterials.values()) m.dispose();
   }
 }
 

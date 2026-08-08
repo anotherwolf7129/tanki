@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { MapDef, PropDef } from '../data/schema';
 import { rampMeshVertices } from '../physics/world';
-import { groundMaterial, propMaterial, skyColour } from './materials';
+import { groundMaterial, hazeColour, propMaterial, skyMaterialTexture } from './materials';
 
 export interface SceneBundle {
   scene: THREE.Scene;
@@ -9,22 +9,28 @@ export interface SceneBundle {
   dispose(): void;
 }
 
+/** One texture tile per 5 m, matching the grid the maps are authored on. */
+const TILE = 5;
+
 export function createScene(def: MapDef): SceneBundle {
   const scene = new THREE.Scene();
-  const sky = skyColour(def.theme);
-  scene.background = new THREE.Color(sky);
+  const haze = hazeColour(def.theme);
+
+  // A gradient sky with a sun bloom and a horizon band. A flat clear colour
+  // reads as a missing skybox, and it gives distant geometry nothing to
+  // dissolve into.
+  scene.background = skyMaterialTexture(def.theme);
   const far = Math.max(def.bounds.x, def.bounds.z) * 3.2;
-  scene.fog = new THREE.Fog(sky, far * 0.35, far);
+  scene.fog = new THREE.Fog(haze, far * 0.4, far);
 
-  // Fill matters more than key light here. Everything is untextured primitives,
-  // so a surface the sun misses has nothing else to read by — with a dark
-  // hemisphere ground term, shadowed geometry and every wall facing away from
-  // the sun collapse to solid black and the map becomes unreadable.
-  const hemi = new THREE.HemisphereLight(sky, 0x5c6470, def.theme === 'space' ? 0.75 : 1.05);
+  // Fill matters more than key light here. Surfaces the sun misses have only
+  // the ambient terms to read by, and with a dark hemisphere ground term every
+  // wall facing away from the sun collapses to solid black.
+  const hemi = new THREE.HemisphereLight(haze, 0x50565f, def.theme === 'space' ? 0.7 : 0.95);
   scene.add(hemi);
-  scene.add(new THREE.AmbientLight(0xffffff, def.theme === 'space' ? 0.25 : 0.35));
+  scene.add(new THREE.AmbientLight(0xffffff, def.theme === 'space' ? 0.22 : 0.3));
 
-  const sun = new THREE.DirectionalLight(0xfff3e0, def.theme === 'space' ? 0.8 : 1.15);
+  const sun = new THREE.DirectionalLight(0xfff3e0, def.theme === 'space' ? 0.85 : 1.2);
   sun.position.set(90, 140, 60);
   sun.castShadow = true;
   const span = Math.max(def.bounds.x, def.bounds.z) * 1.15;
@@ -39,9 +45,21 @@ export function createScene(def: MapDef): SceneBundle {
   scene.add(sun);
   scene.add(sun.target);
 
+  // Rim light from behind and opposite the sun. It costs nothing (no shadow
+  // map) and it is what separates a tank's silhouette from the wall behind it,
+  // which is most of the difference between "boxes" and "vehicles".
+  const rim = new THREE.DirectionalLight(def.theme === 'space' ? 0x8ea0ff : 0xbcd4ff, 0.45);
+  rim.position.set(-70, 50, -90);
+  scene.add(rim);
+
   const owned: (THREE.BufferGeometry | THREE.Material)[] = [];
 
-  const groundGeo = new THREE.PlaneGeometry(def.bounds.x * 2 + 40, def.bounds.z * 2 + 40);
+  // The visual ground matches the physics ground box, so there is no ring of
+  // invisible floor outside the painted plane.
+  const groundW = def.bounds.x * 2 + 120;
+  const groundD = def.bounds.z * 2 + 120;
+  const groundGeo = new THREE.PlaneGeometry(groundW, groundD);
+  scaleUv(groundGeo, groundW / TILE, groundD / TILE);
   owned.push(groundGeo);
   const ground = new THREE.Mesh(groundGeo, groundMaterial(def.theme));
   ground.rotation.x = -Math.PI / 2;
@@ -51,13 +69,14 @@ export function createScene(def: MapDef): SceneBundle {
   // Faint 5 m grid so distances read on sight — the same grid the props use.
   const grid = new THREE.GridHelper(
     Math.max(def.bounds.x, def.bounds.z) * 2,
-    Math.round((Math.max(def.bounds.x, def.bounds.z) * 2) / 5),
+    Math.round((Math.max(def.bounds.x, def.bounds.z) * 2) / TILE),
     0x000000,
     0x000000,
   );
-  (grid.material as THREE.Material).opacity = 0.06;
+  (grid.material as THREE.Material).opacity = 0.05;
   (grid.material as THREE.Material).transparent = true;
   grid.position.y = 0.02;
+  owned.push(grid.geometry, grid.material as THREE.Material);
   scene.add(grid);
 
   for (const p of def.props) {
@@ -75,6 +94,21 @@ export function createScene(def: MapDef): SceneBundle {
   };
 }
 
+/**
+ * Rescales a geometry's UVs so one texture tile always covers the same number
+ * of metres. Box UVs run 0..1 per face regardless of the box's size, so without
+ * this a 200 m perimeter wall and a 4 m crate wear the same single stretched
+ * tile and the arena loses all sense of scale.
+ */
+function scaleUv(geo: THREE.BufferGeometry, u: number, v: number): void {
+  const uv = geo.getAttribute('uv');
+  if (!uv) return;
+  for (let i = 0; i < uv.count; i++) {
+    uv.setXY(i, uv.getX(i) * u, uv.getY(i) * v);
+  }
+  uv.needsUpdate = true;
+}
+
 function buildProp(p: PropDef, owned: (THREE.BufferGeometry | THREE.Material)[]): THREE.Mesh {
   const [w, h, d] = p.size;
   let geo: THREE.BufferGeometry;
@@ -82,10 +116,17 @@ function buildProp(p: PropDef, owned: (THREE.BufferGeometry | THREE.Material)[])
     geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(rampMeshVertices(w, h, d), 3));
     geo.computeVertexNormals();
+    // The ramp mesh is built by hand and carries no UVs, so project them off
+    // world X/Z — good enough for a wedge, and it keeps the tiling consistent.
+    geo.setAttribute('uv', new THREE.BufferAttribute(planarUv(geo, TILE), 2));
   } else if (p.kind === 'cylinder') {
-    geo = new THREE.CylinderGeometry(w / 2, w / 2, h, 14);
+    geo = new THREE.CylinderGeometry(w / 2, w / 2, h, 18);
+    scaleUv(geo, (Math.PI * w) / TILE, h / TILE);
   } else {
     geo = new THREE.BoxGeometry(w, h, d);
+    // Boxes share one UV set across all six faces; using the largest in-plane
+    // pair keeps the tile square-ish on the faces that matter most.
+    scaleUv(geo, Math.max(w, d) / TILE, Math.max(h, d) / TILE);
   }
   owned.push(geo);
   const mesh = new THREE.Mesh(geo, propMaterial(p.material));
@@ -94,4 +135,34 @@ function buildProp(p: PropDef, owned: (THREE.BufferGeometry | THREE.Material)[])
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
+}
+
+/** Triplanar-ish UVs: project each vertex onto whichever plane its normal faces. */
+function planarUv(geo: THREE.BufferGeometry, tile: number): Float32Array {
+  const pos = geo.getAttribute('position');
+  const nrm = geo.getAttribute('normal');
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const z = pos.getZ(i);
+    const ax = Math.abs(nrm.getX(i));
+    const ay = Math.abs(nrm.getY(i));
+    const az = Math.abs(nrm.getZ(i));
+    let u: number;
+    let v: number;
+    if (ay >= ax && ay >= az) {
+      u = x;
+      v = z;
+    } else if (ax >= az) {
+      u = z;
+      v = y;
+    } else {
+      u = x;
+      v = y;
+    }
+    uv[i * 2] = u / tile;
+    uv[i * 2 + 1] = v / tile;
+  }
+  return uv;
 }
