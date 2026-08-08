@@ -6,7 +6,7 @@ import {
   BOSS_LETHALITY,
   BREACH_COS,
   BREACH_MULTIPLIER,
-  METEOR_SELF_DAMAGE,
+  BOSS_SELF_DAMAGE,
   PLAYER_BOSS_DAMAGE,
   POINTS_PER_DAMAGE,
   bossDamageScale,
@@ -85,12 +85,13 @@ export class BossRaidMode extends BaseMode {
   ): number {
     if (!this.boss || !source) return 1;
 
-    // Its own storm, landing on it. The Overseer is armoured against ordnance it
-    // designed and takes a reduced share — but it takes one, and a raid that
-    // holds its ground under a bombardment is a raid making the boss kill
-    // itself. Nothing else in the game damages its own owner, so this is the
-    // only case that has to be caught before the self-damage bail-out below.
-    if (source === target) return target === this.boss ? METEOR_SELF_DAMAGE : 1;
+    // Its own ordnance, landing on it: a rock out of its own storm, a barrage
+    // shell, or the blast off a siege round it should not have fired that
+    // close. The Overseer is armoured against weapons it designed and takes a
+    // reduced share — but it takes one, which is what turns its own splash into
+    // a rule it has to fight around rather than a detail. Nothing a raider does
+    // reaches this branch, so it has to be caught ahead of the outbound scale.
+    if (source === target) return target === this.boss ? BOSS_SELF_DAMAGE : 1;
 
     // Outbound: siege ordnance. The Overseer's gun was authored to fight tanks
     // and it is besieging them instead, so everything it does lands harder, and

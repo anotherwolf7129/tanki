@@ -133,6 +133,16 @@ off, working round to the deck while it is busy elsewhere — is the mode.
   does not have it. You flank it by taking its attention elsewhere first, not by driving wide.
 - **It aims at groups.** With a nine-metre blast it puts the shell between two raiders rather than
   on one, and leads a lone target properly.
+- **It is inside that blast radius too, and it knows it.** Everything the Overseer fires can hurt
+  the Overseer — it takes a quarter share of its own splash, the same deal its Meteor Storm has
+  always given it. So before every trigger pull it traces the barrel line it is *actually* pointing
+  down, plus every shell in the fan behind that one, and holds fire if any of them would detonate
+  close enough to come back. It does not shoot the wall it has backed against, and it does not
+  answer a raider hugging its glacis with a siege round: it backs out to a range its gun works at
+  and reaches for a *Quake* instead, which is why getting inside its minimum range is dangerous
+  rather than free. When a blast does catch it anyway — someone reversed into the shell, a rock
+  landed where it was about to fire — it says so in the kill feed and widens the ring it refuses to
+  shoot inside. It shoots once and works the rest out.
 - **It protects its own weak point.** When it picks ground it prefers a wall behind its engine deck,
   refuses positions where the raid has it ringed, and turns its glacis toward whoever it is fighting
   when it stops. Reaching the deck is a manoeuvre you have to earn.

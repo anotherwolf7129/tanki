@@ -372,7 +372,7 @@
     "pitchDownDeg": 14,
     "projectileSpeed": 150,
     "splash": { "radius": 9, "damageMax": 260, "damageMin": 110 },
-    "selfDamage": false,
+    "selfDamage": true,
     "purchasable": false,
     "special": ["modeRestricted", "siege", "slowTraverse"]
   }
