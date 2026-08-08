@@ -278,6 +278,8 @@ export class Tank {
   /** Called by the weapon when it fires, so the gun kicks in its mantlet. */
   onFired(recoil: number): void {
     this.mesh.kick(0.16 + Math.min(0.34, recoil * 0.09));
+    // The raid boss hangs the rest of its salvo off this — see `BossController`.
+    this.ai?.onFired?.();
   }
 
   /** Battle points feed the overdrive bar as well as the scoreboard. */

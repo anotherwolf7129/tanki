@@ -5,7 +5,17 @@ import { DIFFICULTIES, DynamicDifficulty, LAST_HIT_COOLDOWN, LAST_HIT_FLOOR, typ
 import { map as mapDef } from '../data/maps';
 import type { BattleSettings } from '../data/modes';
 import type { MapDef, TeamId, TurretDef } from '../data/schema';
-import { ALLY_HULL_MULTIPLIER, BOSS_HULL, BOSS_NAME, BOSS_TURRET, bossHealth, phaseFor } from '../data/raid';
+import {
+  ALLY_HULL_MULTIPLIER,
+  BOSS_ARMOR_KITS,
+  BOSS_DAMAGE_KITS,
+  BOSS_HULL,
+  BOSS_NAME,
+  BOSS_REPAIR_KITS,
+  BOSS_TURRET,
+  bossHealth,
+  phaseFor,
+} from '../data/raid';
 import { SELF_DESTRUCT_TIME, SUPPLY_ORDER } from '../data/supplies';
 import { BossController } from '../ai/boss';
 import { BotController } from '../ai/bot';
@@ -251,9 +261,20 @@ export class Battle implements Arena {
       nav: this.nav,
       profile: this.profile,
       phase: () => phaseFor(boss.healthFraction),
+      def: this.def,
+      nearestSupply: (from, kinds) => this.pickups.nearest(from, kinds),
     });
     boss.ai = ai;
-    mode.bindBoss(boss, ai, allies);
+    mode.bindBoss(boss, ai);
+
+    // It fights with supplies like everyone else. A finite stock, so a raid that
+    // keeps the pressure on eventually spends them for it — and once they are
+    // gone the only kits left are the ones on the floor, which it will come out
+    // of position to take.
+    boss.giveSupply('repair', BOSS_REPAIR_KITS);
+    boss.giveSupply('armor', BOSS_ARMOR_KITS);
+    boss.giveSupply('damage', BOSS_DAMAGE_KITS);
+
     this.notify(`${BOSS_NAME} is on the field — bring it down`, 'warning');
     return boss;
   }
@@ -366,8 +387,9 @@ export class Battle implements Arena {
     if (!opts.ignoreArmor) dmg *= target.status.damageTakenScale;
     dmg *= 1 - target.damageReduction;
     // Mode-specific reshaping — in Boss Raid this is the player's damage edge
-    // over the squad and the engine-deck breach bonus.
-    dmg *= this.mode.damageScale(target, source, opts, this);
+    // over the squad, the engine-deck breach bonus, and the boss's siege
+    // ordnance on the way back.
+    dmg *= this.mode.damageScale(target, source, opts, this, amount);
     if (source?.isPlayer && !selfInflicted) dmg *= this.profile.player.damageDealtMultiplier;
     if (target.isPlayer) dmg *= this.profile.player.damageTakenMultiplier;
 
@@ -409,10 +431,22 @@ export class Battle implements Arena {
     return dmg;
   }
 
+  /**
+   * One healing funnel, for the same reason damage has one.
+   *
+   * The raid boss is clamped to the top of the phase it is currently in, and
+   * that clamp lives here rather than at each call site so that *every* way it
+   * can gain health — regeneration, its own repair kits, a box off the floor,
+   * Purge — obeys it. A gate the raid has pushed the Overseer through is
+   * permanent, so a long fight is always progress even when it is going badly.
+   */
   heal(target: Tank, amount: number, _source: Tank | null): number {
     if (!target.alive || amount <= 0) return 0;
     const before = target.health;
-    target.health = Math.min(target.maxHealth, target.health + amount);
+    const ceiling = target.isBoss
+      ? target.maxHealth * phaseFor(target.healthFraction).from
+      : target.maxHealth;
+    target.health = Math.min(Math.max(before, ceiling), target.health + amount);
     return target.health - before;
   }
 
@@ -482,7 +516,9 @@ export class Battle implements Arena {
     this.mode.onDeath(victim, this);
     victim.ai?.onDeath();
     victim.kill();
-    victim.respawnTimer = RESPAWN_TIME;
+    // Most modes take the flat wait; Boss Raid charges for deaths in seconds
+    // that grow as the raid takes more of them.
+    victim.respawnTimer = this.mode.respawnDelay(victim, this) ?? RESPAWN_TIME;
 
     this.mode.onKill(killer ?? null, victim, this);
 
@@ -702,9 +738,9 @@ export class Battle implements Arena {
   // ---- presentation -----------------------------------------------------
 
   /**
-   * Whose eyes the camera is behind. Normally the player's — but a raid that
-   * has spent its last reinforcement leaves them watching the squad's last
-   * stand rather than staring at an empty respawn timer.
+   * Whose eyes the camera is behind. Normally the player's — the fallback to a
+   * living ally covers any mode that benches a destroyed tank for good, so that
+   * it is never a stare at an empty respawn timer.
    */
   private viewTarget(): Tank {
     if (this.player.alive || this.mode.canRespawn(this.player, this)) return this.player;

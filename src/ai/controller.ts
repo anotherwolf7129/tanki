@@ -12,4 +12,9 @@ export interface AiController {
   pendingOverdrive: boolean;
   update(dt: number, now: number): void;
   onDeath(): void;
+  /**
+   * Called by the tank each time its main gun goes off. Only the raid boss uses
+   * it, to fan the rest of a salvo out around the shell the weapon just fired.
+   */
+  onFired?(): void;
 }

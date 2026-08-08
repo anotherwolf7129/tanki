@@ -41,12 +41,15 @@ export interface BossStatus {
   targetingPlayer: boolean;
   /** Your share of its attention, 0..1. */
   playerThreat: number;
-  reinforcements: number;
+  /** Raider deaths so far. Reinforcements are unlimited; these set the price. */
+  losses: number;
+  /** Seconds the next death will cost, which rises with every one before it. */
+  respawnDelay: number;
+  /** True once the boss is berserk, so the HUD can say so. */
+  enraged: boolean;
   /** Ability currently winding up, and how far through the wind-up it is. */
   telegraph: string | null;
   telegraphProgress: number;
-  /** True once the player has spent the last reinforcement and cannot return. */
-  playerOut: boolean;
 }
 
 export interface ModeController {
@@ -63,11 +66,15 @@ export interface ModeController {
   markers(): MinimapMarker[];
   /**
    * Mode-specific multiplier applied inside the battle's damage funnel. Modes
-   * that do not reshape damage return 1 and cost nothing.
+   * that do not reshape damage return 1 and cost nothing. `amount` is the raw
+   * damage before any multiplier, which is what lets a mode express a rule as
+   * "this always lands for at least N" rather than as a bare factor.
    */
-  damageScale(target: Tank, source: Tank | null, opts: DamageOptions, arena: Arena): number;
-  /** False keeps a destroyed tank out of the fight — raids run on a ticket pool. */
+  damageScale(target: Tank, source: Tank | null, opts: DamageOptions, arena: Arena, amount: number): number;
+  /** False keeps a destroyed tank out of the fight entirely. */
   canRespawn(tank: Tank, arena: Arena): boolean;
+  /** Seconds before this tank comes back, or null for the battle's default. */
+  respawnDelay(tank: Tank, arena: Arena): number | null;
   /** Boss-fight state for the HUD, or null in every other mode. */
   bossStatus(arena: Arena): BossStatus | null;
   dispose(): void;
@@ -97,11 +104,14 @@ export abstract class BaseMode implements ModeController {
   markers(): MinimapMarker[] {
     return [];
   }
-  damageScale(_target: Tank, _source: Tank | null, _opts: DamageOptions, _arena: Arena): number {
+  damageScale(_target: Tank, _source: Tank | null, _opts: DamageOptions, _arena: Arena, _amount: number): number {
     return 1;
   }
   canRespawn(_tank: Tank, _arena: Arena): boolean {
     return true;
+  }
+  respawnDelay(_tank: Tank, _arena: Arena): number | null {
+    return null;
   }
   bossStatus(_arena: Arena): BossStatus | null {
     return null;

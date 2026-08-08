@@ -137,20 +137,43 @@ off, working round to the deck while it is busy elsewhere — is the mode.
   refuses positions where the raid has it ringed, and turns its glacis toward whoever it is fighting
   when it stops. Reaching the deck is a manoeuvre you have to earn.
 - **It spends abilities on reasons.** *Quake* when raiders stack on it, *Siege Barrage* — a lobbed
-  salvo that does not care about your cover — when they hide or bunch up at range, *Overcharge* when
-  someone is isolated, and *Purge* to throw the raid off it. Each has a wind-up, a kill-feed warning
-  and a pulsing ring at the hull, so every one of them is something you could have avoided.
+  salvo that does not care about your cover — when they hide or bunch up at range, *Structural
+  Collapse* when they hide behind something, *Overcharge* when someone is isolated, and *Purge* to
+  throw the raid off it. Each has a wind-up, a kill-feed warning and a pulsing ring at the hull, so
+  every one of them is something you could have avoided.
+- **It fights with the map.** *Structural Collapse* ranges the cover the raid is actually using —
+  the block you are shooting from behind, the crate you are reloading against, the supply drop
+  everyone converges on — marks every one of them for two seconds, and brings them down on top of
+  you. Falling masonry does not check line of sight: being on the far side of the wall is not a
+  defence when the wall is what is landing. Between the collapse and the barrage, the only ground it
+  has no answer to is open ground — which is where its main gun lives. That is the trap.
+- **It heals like a player.** It carries repair kits and spends them the way you do — and the
+  over-time half is interrupted by damage exactly as yours is, so a boss that has just cracked one
+  open is a boss you can punish for it. When it runs out it drives to the boxes on the floor, which
+  is the one reliable way to pull it off a position it likes. *Purge* patches it as it throws you.
+  None of it can take the Overseer back through a phase gate — every heal in the game funnels
+  through one clamp in `Battle.heal`.
 - **It will not be waited out.** Disengage completely — nobody in sight and nobody hurting it — and
-  it repairs. It can never repair past the phase gate the raid has already pushed it through, so a
-  long fight is always progress even when it is going badly.
+  it repairs, six times faster while the whole raid is dead at once.
 
-**Phases change tempo, never numbers.** At 66% and 33% its ability cooldowns shorten and its salvos
-grow. A boss that quietly gains armour reads as cheating; a boss that starts firing twice as often
+**Its shells are sized against armour, not against tanks.** Everything it fires lands for ×1.20, and
+×1.28 again on a light hull: one direct hit takes a Wasp to a sliver, and you are allowed exactly one
+mistake. Heavy hulls take ×0.86 of it, which is the whole reason to bring one. It is the only place
+in the game where hull class changes how much damage you *take*.
+
+**Phases change tempo and volume, never armour.** At 66%, 33% and 15% its cooldowns shorten and its
+main gun goes from one shell a pull to two, three, then four fanned out either side of where you
+were about to dodge. Crossing a gate announces itself and throws the raid off the hull with a
+pressure wave, and the last one turns the Overseer berserk: permanently supercharged, permanently
+moving. A boss that quietly gains armour reads as cheating; a boss that fires four shells at once
 reads as angry.
 
-**One shared reinforcement pool.** Every raider death — yours or a squadmate's — spends one. Spend
-them all and the dead stay down; lose everyone and the raid is over. If you are the one who is out,
-the camera follows a surviving squadmate rather than an empty respawn timer.
+**Reinforcements are unlimited.** Nobody is ever benched — the squad always comes back. What a death
+costs is *time*: the wait climbs from four seconds toward twelve as the raid takes losses, and every
+one of those seconds is a second the Overseer spends repairing. The old shared ticket pool failed in
+both directions — a raid that was winning never noticed it, and a raid that was losing was ended by
+an accountant rather than by the boss. Now the only two things that can beat you are the clock and a
+boss healing faster than you hurt it.
 
 Squadmates run full-tier hulls rather than the bot equipment gap, and a roster picked for a boss
 fight — a body to hold its attention, a healer, then reach. A Rusher's fifteen-metre flamethrower
@@ -272,9 +295,11 @@ node tools/raid-smoke.mjs silence  # a different map
 ```
 
 builds, serves, starts a raid in a real browser and fast-forwards the simulation far faster than
-real time, driving a stand-in player, then reports how long the fight lasted, how much of the
-reinforcement pool it cost, which abilities actually fired, how far the boss travelled, and how much
-of the time the player was in its rear arc. Run it several times — bot pathing makes single runs
+real time, driving a stand-in player, then reports how long the fight lasted, how many losses the
+squad took and what a death costs by the end, which abilities actually fired, what the boss had left
+in its supply rack, how far it travelled, and how much of the time the player was in its rear arc.
+The stand-in cannot aim, so read its runs as "what the bot squad alone manages" — the human share of
+the damage is the whole premise of the mode and the harness does not model it. Run it several times — bot pathing makes single runs
 noisy, and it is the spread that tells you whether the mode is tuned. It is what caught the two
 balance bugs that mattered: a repair rate that scaled off the boss's own pool and so out-healed the
 entire squad, and squadmates whose guns could not reach the range the boss holds.
