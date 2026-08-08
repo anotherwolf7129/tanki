@@ -15,7 +15,7 @@ export const polygon: MapDef = {
   displayName: 'Polygon',
   size: 'small',
   maxPlayers: 16,
-  modes: ['DM', 'TDM', 'CP'],
+  modes: ['DM', 'TDM', 'CP', 'RAID'],
   gravityScale: 1.0,
   theme: 'urban',
   bounds: half,

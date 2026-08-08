@@ -29,7 +29,7 @@ export const kungur: MapDef = {
   displayName: 'Kungur',
   size: 'medium',
   maxPlayers: 24,
-  modes: ['DM', 'TDM', 'CTF', 'CP'],
+  modes: ['DM', 'TDM', 'CTF', 'CP', 'RAID'],
   gravityScale: 1.0,
   theme: 'summer',
   bounds: half,

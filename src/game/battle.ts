@@ -5,10 +5,12 @@ import { DIFFICULTIES, DynamicDifficulty, LAST_HIT_COOLDOWN, LAST_HIT_FLOOR, typ
 import { map as mapDef } from '../data/maps';
 import type { BattleSettings } from '../data/modes';
 import type { MapDef, TeamId, TurretDef } from '../data/schema';
+import { ALLY_HULL_MULTIPLIER, BOSS_HULL, BOSS_NAME, BOSS_TURRET, bossHealth, phaseFor } from '../data/raid';
 import { SELF_DESTRUCT_TIME, SUPPLY_ORDER } from '../data/supplies';
+import { BossController } from '../ai/boss';
 import { BotController } from '../ai/bot';
 import { NavGrid } from '../ai/navgrid';
-import { PERSONAS, BOT_NAMES, rosterFor } from '../ai/personas';
+import { PERSONAS, BOT_NAMES, raidRosterFor, rosterFor } from '../ai/personas';
 import { TeamBoard } from '../ai/teamboard';
 import { angleDelta, ballisticPitch, clamp, damp, DEG, predictIntercept, shuffled } from '../core/mathx';
 import type { InputState } from '../core/input';
@@ -20,11 +22,12 @@ import { ChaseCamera } from '../render/camera';
 import { Effects } from '../render/effects';
 import { createScene, type SceneBundle } from '../render/scene';
 import { pruneChassisCache } from '../render/tankmesh';
+import { BossRaidMode } from '../modes/bossraid';
 import { CaptureFlagMode } from '../modes/captureflag';
 import { ControlPointsMode } from '../modes/controlpoints';
 import { DeathmatchMode } from '../modes/deathmatch';
 import { TeamDeathmatchMode } from '../modes/teamdeathmatch';
-import type { ModeController } from '../modes/base';
+import type { BossStatus, ModeController } from '../modes/base';
 import { OverdriveSystem } from './overdrive';
 import type { Arena, DamageOptions, Notification, ProjectileSpawn } from './types';
 
@@ -50,6 +53,9 @@ export interface BattleSnapshot {
   scoreboard: Tank[];
   teamScores: Record<'red' | 'blue', number> | null;
   selfDestruct: number | null;
+  boss: BossStatus | null;
+  /** Tank the camera is on, which is not the player once they are out. */
+  viewing: Tank;
   over: boolean;
   winner?: string;
   reason?: string;
@@ -77,6 +83,8 @@ export class Battle implements Arena {
   private readonly notifications: Notification[] = [];
 
   readonly player: Tank;
+  /** The Overseer, in Boss Raid only. */
+  readonly boss: Tank | null = null;
   time = 0;
   private elapsed = 0;
   private finished: { winner?: string; reason?: string } | null = null;
@@ -124,11 +132,22 @@ export class Battle implements Arena {
       turretId: loadout.turret,
     });
 
-    this.spawnBots(teamed, playerTeam);
+    if (this.mode instanceof BossRaidMode) {
+      this.boss = this.spawnRaid(this.mode);
+    } else {
+      this.spawnBots(teamed, playerTeam);
+    }
+
     // Everyone starts with one of each supply so the first minute has options.
     for (const kind of SUPPLY_ORDER) {
       this.player.giveSupply(kind, 3);
-      for (const bot of this.tanks) if (!bot.isPlayer && Math.random() < 0.5) bot.giveSupply(kind, 1);
+      for (const bot of this.tanks) {
+        if (bot.isPlayer || bot.isBoss) continue;
+        // A raid squad is stocked properly: it is meant to survive a boss fight,
+        // not trade evenly with the tank next to it.
+        if (this.settings.mode === 'RAID') bot.giveSupply(kind, 2);
+        else if (Math.random() < 0.5) bot.giveSupply(kind, 1);
+      }
     }
   }
 
@@ -142,6 +161,8 @@ export class Battle implements Arena {
 
   private createMode(): ModeController {
     switch (this.settings.mode) {
+      case 'RAID':
+        return new BossRaidMode(this.def, this.bundle.scene);
       case 'TDM':
         return new TeamDeathmatchMode(this.def, this.bundle.scene);
       case 'CTF':
@@ -182,10 +203,68 @@ export class Battle implements Arena {
     }
   }
 
+  /**
+   * The raid: an allied squad on the player's team and one Overseer opposite.
+   * Returns the boss.
+   */
+  private spawnRaid(mode: BossRaidMode): Tank {
+    const allies = this.settings.botCount;
+    const personas = raidRosterFor(allies);
+    const names = shuffled(BOT_NAMES);
+
+    for (let i = 0; i < allies; i++) {
+      const persona = PERSONAS[personas[i]];
+      const ally = this.spawnTank({
+        name: names[i % names.length],
+        team: this.player.team,
+        isPlayer: false,
+        hullMultiplier: ALLY_HULL_MULTIPLIER,
+        hullId: persona.hull,
+        turretId: persona.turret,
+      });
+      ally.ai = new BotController(ally, persona, {
+        arena: this,
+        nav: this.nav,
+        board: this.boards[ally.team],
+        profile: this.profile,
+        slack: () => this.dynamic.slack,
+        nearestPickup: (from) => this.pickups.nearest(from),
+        objective: (self) => this.mode.objectiveFor(self, this),
+      });
+    }
+
+    const boss = this.spawnTank({
+      name: BOSS_NAME,
+      team: this.player.team === 'blue' ? 'red' : 'blue',
+      isPlayer: false,
+      isBoss: true,
+      hullId: BOSS_HULL,
+      turretId: BOSS_TURRET,
+    });
+    // The boss sits outside the equipment gap entirely: its pool is authored for
+    // the size of the squad, not derived from a tier multiplier.
+    boss.maxHealth = bossHealth(allies, this.profile.bot.hullTierMultiplier);
+    boss.health = boss.maxHealth;
+
+    const ai = new BossController(boss, {
+      arena: this,
+      nav: this.nav,
+      profile: this.profile,
+      phase: () => phaseFor(boss.healthFraction),
+    });
+    boss.ai = ai;
+    mode.bindBoss(boss, ai, allies);
+    this.notify(`${BOSS_NAME} is on the field — bring it down`, 'warning');
+    return boss;
+  }
+
   private spawnTank(spec: {
     name: string;
     team: TeamId;
     isPlayer: boolean;
+    isBoss?: boolean;
+    /** Overrides the difficulty profile's hull tier, for raid squadmates. */
+    hullMultiplier?: number;
     hullId: string;
     turretId: string;
   }): Tank {
@@ -200,12 +279,13 @@ export class Battle implements Arena {
         name: spec.name,
         team: spec.team,
         isPlayer: spec.isPlayer,
+        isBoss: spec.isBoss,
         hull: h,
         turret: t,
-        hullMultiplier: p.hullTierMultiplier,
-        turretMultiplier: p.turretTierMultiplier,
+        hullMultiplier: spec.isBoss ? 1 : (spec.hullMultiplier ?? p.hullTierMultiplier),
+        turretMultiplier: spec.isBoss ? 1 : p.turretTierMultiplier,
         spawnProtection: p.spawnProtection,
-        overdriveChargeRate: p.overdriveChargeRate,
+        overdriveChargeRate: spec.isBoss ? 1 : p.overdriveChargeRate,
       },
       this.phys,
       this.bundle.scene,
@@ -285,6 +365,9 @@ export class Battle implements Arena {
     let dmg = amount;
     if (!opts.ignoreArmor) dmg *= target.status.damageTakenScale;
     dmg *= 1 - target.damageReduction;
+    // Mode-specific reshaping — in Boss Raid this is the player's damage edge
+    // over the squad and the engine-deck breach bonus.
+    dmg *= this.mode.damageScale(target, source, opts, this);
     if (source?.isPlayer && !selfInflicted) dmg *= this.profile.player.damageDealtMultiplier;
     if (target.isPlayer) dmg *= this.profile.player.damageTakenMultiplier;
 
@@ -428,7 +511,7 @@ export class Battle implements Arena {
   update(dt: number, input: InputState): void {
     if (this.finished) {
       this.fx.update(dt);
-      this.camera.update(dt, this.player, this.fx.shake, null);
+      this.camera.update(dt, this.viewTarget(), this.fx.shake, null);
       return;
     }
 
@@ -442,7 +525,7 @@ export class Battle implements Arena {
     for (const tank of this.tanks) {
       if (!tank.alive) {
         tank.respawnTimer -= dt;
-        if (tank.respawnTimer <= 0) this.respawn(tank);
+        if (tank.respawnTimer <= 0 && this.mode.canRespawn(tank, this)) this.respawn(tank);
         continue;
       }
       if (tank.ai) {
@@ -465,10 +548,11 @@ export class Battle implements Arena {
 
     for (const tank of this.tanks) if (tank.alive) tank.syncMesh();
 
+    const view = this.viewTarget();
     this.fx.update(dt);
-    this.camera.update(dt, this.player, this.fx.shake, this.player.weapon.scopeFov);
-    this.bundle.sun.position.set(this.player.position.x + 90, 150, this.player.position.z + 60);
-    this.bundle.sun.target.position.set(this.player.position.x, 0, this.player.position.z);
+    this.camera.update(dt, view, this.fx.shake, view === this.player ? this.player.weapon.scopeFov : null);
+    this.bundle.sun.position.set(view.position.x + 90, 150, view.position.z + 60);
+    this.bundle.sun.target.position.set(view.position.x, 0, view.position.z);
     this.bundle.sun.target.updateMatrixWorld();
 
     const result = this.mode.result(this.elapsed, this);
@@ -617,6 +701,17 @@ export class Battle implements Arena {
 
   // ---- presentation -----------------------------------------------------
 
+  /**
+   * Whose eyes the camera is behind. Normally the player's — but a raid that
+   * has spent its last reinforcement leaves them watching the squad's last
+   * stand rather than staring at an empty respawn timer.
+   */
+  private viewTarget(): Tank {
+    if (this.player.alive || this.mode.canRespawn(this.player, this)) return this.player;
+    const survivor = this.tanks.find((t) => t.alive && t !== this.player && this.areAllies(this.player, t));
+    return survivor ?? this.player;
+  }
+
   snapshot(): BattleSnapshot {
     const scoreboard = [...this.tanks].sort((a, b) => b.score - a.score || b.kills - a.kills);
     return {
@@ -629,6 +724,8 @@ export class Battle implements Arena {
       scoreboard,
       teamScores: this.mode.teamScores(),
       selfDestruct: this.selfDestructTimer,
+      boss: this.mode.bossStatus(this),
+      viewing: this.viewTarget(),
       over: this.finished !== null,
       winner: this.finished?.winner,
       reason: this.finished?.reason,
@@ -641,9 +738,10 @@ export class Battle implements Arena {
     pickups: ReturnType<PickupSystem['markers']>;
     mines: { x: number; z: number }[];
   } {
+    const eyes = this.viewTarget();
     const tanks = this.tanks
       .filter((t) => t.alive)
-      .filter((t) => t.isPlayer || this.areAllies(this.player, t) || this.isVisibleToPlayer(t))
+      .filter((t) => t.isPlayer || this.areAllies(this.player, t) || this.isVisibleFrom(eyes, t))
       .map((t) => ({
         x: t.position.x,
         z: t.position.z,
@@ -655,15 +753,15 @@ export class Battle implements Arena {
       tanks,
       objectives: this.mode.markers(),
       pickups: this.pickups.markers(),
-      mines: this.mines.visibleTo(this.player, this),
+      mines: this.mines.visibleTo(eyes, this),
     };
   }
 
-  private isVisibleToPlayer(t: Tank): boolean {
+  private isVisibleFrom(eyes: Tank, t: Tank): boolean {
     if (t.status.has('reveal')) return true;
-    const from = this.player.turretOrigin(new CANNON.Vec3());
+    const from = eyes.turretOrigin(new CANNON.Vec3());
     if (from.distanceTo(t.position) > 130) return false;
-    return this.phys.lineOfSight(from, t.centre(), this.player.vehicle.body);
+    return this.phys.lineOfSight(from, t.centre(), eyes.vehicle.body);
   }
 
   /** Screen-space aim point for the reticle and the ballistic indicator. */

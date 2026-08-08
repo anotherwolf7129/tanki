@@ -2,6 +2,14 @@ import { HULLS, HULL_IDS, TURRETS, TURRET_IDS, preferredRange } from '../data';
 import { DIFFICULTIES, DIFFICULTY_IDS } from '../data/difficulty';
 import { MAPS, MAP_IDS, mapsForMode } from '../data/maps';
 import { DEFAULT_SETTINGS, MODES, MODE_CODES, type BattleSettings } from '../data/modes';
+import {
+  ALLY_BOSS_DAMAGE,
+  BREACH_MULTIPLIER,
+  PLAYER_BOSS_DAMAGE,
+  RAID_PHASES,
+  bossHealth,
+  reinforcementsFor,
+} from '../data/raid';
 import type { ModeCode } from '../data/schema';
 import type { PlayerLoadout } from '../game/battle';
 
@@ -84,7 +92,13 @@ export class Menu {
     const availableMaps = mapsForMode(settings.mode);
     if (!availableMaps.includes(settings.mapId)) settings.mapId = availableMaps[0] ?? MAP_IDS[0];
     const mapChoice = MAPS[settings.mapId];
-    settings.botCount = Math.min(settings.botCount, mapChoice.maxPlayers - 1);
+    const raid = settings.mode === 'RAID';
+    // A raid is a squad, not a lobby: the boss takes a slot, and past five
+    // allies the player stops being the thing that kills it.
+    const maxBots = raid
+      ? Math.max(1, Math.min(5, mapChoice.maxPlayers - 2))
+      : Math.max(1, mapChoice.maxPlayers - 1);
+    settings.botCount = Math.min(settings.botCount, maxBots);
 
     this.root.innerHTML = `
       <div class="menu-inner">
@@ -164,9 +178,14 @@ export class Menu {
               </select>
             </label>
 
-            <label>Opponents <output id="botOut">${settings.botCount}</output>
-              <input id="bots" type="range" min="1" max="${Math.max(1, mapChoice.maxPlayers - 1)}" value="${settings.botCount}" />
+            <label>${raid ? 'Squadmates' : 'Opponents'} <output id="botOut">${settings.botCount}</output>
+              <input id="bots" type="range" min="1" max="${maxBots}" value="${settings.botCount}" />
             </label>
+            ${
+              raid
+                ? `<p class="hint">${settings.botCount} allied bots plus you against one Overseer — <b>${bossHealth(settings.botCount, profile.bot.hullTierMultiplier).toLocaleString()}</b> hp, <b>${reinforcementsFor(settings.botCount)}</b> shared reinforcements.</p>`
+                : ''
+            }
 
             <label>Time limit <output id="timeOut">${Math.round(settings.timeLimit / 60)} min</output>
               <input id="time" type="range" min="2" max="15" value="${Math.round(settings.timeLimit / 60)}" />
@@ -190,6 +209,21 @@ export class Menu {
                 </button>`,
               ).join('')}
             </div>
+            ${
+              raid
+                ? `<div class="ledger">
+              <h3>Your edge in the raid</h3>
+              <ul>
+                <li>Your damage to the Overseer ×${PLAYER_BOSS_DAMAGE.toFixed(2)} vs squadmate ×${ALLY_BOSS_DAMAGE.toFixed(2)}</li>
+                <li>Direct hits on its engine deck ×${BREACH_MULTIPLIER.toFixed(2)} again</li>
+                <li>It targets by accumulated damage — out-damaging the squad pulls it onto you</li>
+                <li>It keeps its back to walls and refuses to be surrounded</li>
+                <li>Break contact for 6 s and it starts repairing</li>
+                <li>${RAID_PHASES.map((p) => `${p.name} at ${Math.round(p.from * 100)}%`).join(' · ')}</li>
+              </ul>
+            </div>`
+                : ''
+            }
             <div class="ledger">
               <h3>Your edge</h3>
               <ul>
@@ -257,10 +291,14 @@ export class Menu {
       settings.mapId = (e.target as HTMLSelectElement).value;
       this.persistAndRender();
     });
-    q<HTMLInputElement>('#bots').addEventListener('input', (e) => {
+    const bots = q<HTMLInputElement>('#bots');
+    bots.addEventListener('input', (e) => {
       settings.botCount = Number((e.target as HTMLInputElement).value);
       q<HTMLOutputElement>('#botOut').textContent = String(settings.botCount);
     });
+    // The raid panel quotes numbers derived from the squad size, so it has to be
+    // rebuilt once the slider settles rather than left showing the old fight.
+    if (settings.mode === 'RAID') bots.addEventListener('change', () => this.persistAndRender());
     q<HTMLInputElement>('#time').addEventListener('input', (e) => {
       const minutes = Number((e.target as HTMLInputElement).value);
       settings.timeLimit = minutes * 60;

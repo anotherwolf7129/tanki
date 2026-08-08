@@ -219,7 +219,7 @@ export type StatusKind =
 
 export type SupplyKind = 'repair' | 'armor' | 'damage' | 'nitro' | 'mine';
 
-export type ModeCode = 'DM' | 'TDM' | 'CTF' | 'CP';
+export type ModeCode = 'DM' | 'TDM' | 'CTF' | 'CP' | 'RAID';
 
 /** Primitive prop kit. Everything is built on the 5 m grid from the spec. */
 export type PropKind = 'box' | 'ramp' | 'cylinder' | 'platform';

@@ -151,6 +151,22 @@ export function rosterFor(count: number): PersonaId[] {
   return out.slice(0, count);
 }
 
+/**
+ * A raid squad, which wants different things from a deathmatch roster.
+ *
+ * The Overseer holds about forty metres, so every gun in the squad has to reach
+ * that far — a Rusher's fifteen-metre flamethrower simply never gets to fire,
+ * and a squadmate that spends the whole raid running at something it cannot
+ * touch is worse than no squadmate at all. What is left is a body to hold its
+ * attention first, then a healer, then reach.
+ */
+export function raidRosterFor(count: number): PersonaId[] {
+  const order: PersonaId[] = ['bruiser', 'support', 'flanker', 'objective', 'sniper', 'bruiser'];
+  const out: PersonaId[] = [];
+  for (let i = 0; i < count; i++) out.push(order[i % order.length]);
+  return out;
+}
+
 export const BOT_NAMES = [
   'Vosper', 'Kite', 'Ashgrove', 'Redline', 'Marrow', 'Quill', 'Halcyon', 'Brackish',
   'Ninefold', 'Tarn', 'Coldiron', 'Vellum', 'Sundown', 'Pike', 'Gantry', 'Loam',

@@ -63,11 +63,12 @@ to the target and recoil applied to the shooter as separate impulse channels, da
 `rangeMaxDamage` and `rangeMinDamage`, tanks that flip and self-right after three seconds, and
 raycast-suspension hover hulls that float over terrain. One standard prop is 5 m, as the spec fixes.
 
-**All 16 turrets**, data-driven from `src/data/turrets.json`, covering every firing archetype:
+**All 17 turrets**, data-driven from `src/data/turrets.json`, covering every firing archetype:
 cone (Firebird, Freeze), locked beam (Isida, Terminator), chain (Tesla), clip and pellets (Hammer),
 sustained (Twins), bouncing (Ricochet), critical-hit single shot (Smoky), guided volley (Striker),
-overheating minigun (Vulcan), splash (Thunder), charged piercing hitscan (Railgun), ballistic with a
-landing indicator (Magnum), dual mode (Gauss), and the scoped charge sniper (Shaft).
+overheating minigun (Vulcan), splash (Thunder, and the boss's siege Cataclysm), charged piercing
+hitscan (Railgun), ballistic with a landing indicator (Magnum), dual mode (Gauss), and the scoped
+charge sniper (Shaft).
 
 **All 11 hulls** with their Overdrives implemented as real world effects rather than stat buffs —
 N2 bomb, battlefield sonar, blast jump, EMP, freezing icicle, supercharge, requisition, arc pulse,
@@ -81,17 +82,66 @@ than a lockout, Mine and Repair Kit exempt from each other, and box pickups that
 Cooldowns entirely — which is what makes drop-zone control worth fighting over. Plus the Gold Box,
 announced, marked on the minimap, dropped from the sky, and contested by the bots.
 
-**Four modes**: Deathmatch, Team Deathmatch, Capture the Flag (with the wiki's pickup/transfer/
-delivery scoring, banked and only paid out on delivery) and Control Points.
+**Five modes**: Deathmatch, Team Deathmatch, Capture the Flag (with the wiki's pickup/transfer/
+delivery scoring, banked and only paid out on delivery), Control Points, and **Boss Raid** — you and
+a squad against one Overseer, described in its own section below.
 
 **Seven maps** assembled from a 5 m prop kit: Sandbox, Silence, Kungur, Rio, Polygon, Stadium and
 low-gravity Madness. Geometry is original primitives, not ripped assets.
 
 **The AI**, which is where the real design work lives — see below.
 
-Not implemented: the Rugby / Juggernaut / Siege / Assault modes, modules, drones, augments, the
+Not implemented: the Rugby / Siege / Assault modes, modules, drones, augments, the
 crystal economy and purchasing, and audio. The modification tier system is collapsed to a single
 tier per item plus a flat multiplier, which the difficulty profile uses as the equipment gap.
+
+## Boss Raid
+
+One Overseer against you and a squad of allied bots. It is the one place in the game where an
+opponent is *not* slow and imprecise — but it earns that by being a different kind of opponent
+rather than a line bot with the handicaps switched off.
+
+**You are the raid's damage.** Your shots land on the boss for ×2.00; a squadmate's for ×0.45. A
+direct hit on its engine deck — the rear arc — is worth ×1.60 again. Every one of those numbers is
+printed in the garage next to the standard "Your edge" panel, because an advantage you can read is
+an advantage that feels earned.
+
+**Which is exactly what puts you in front of the gun.** The Overseer picks its target from a
+decaying table of who has actually hurt it, so out-damaging four squadmates drags its attention onto
+you. The HUD's threat meter is your share of the current leader's, and it turns red and says so when
+you are the one it is looking at. Trading that attention with the squad — pushing damage, backing
+off, working round to the deck while it is busy elsewhere — is the mode.
+
+**It is genuinely smarter, in ways you can see** (`src/ai/boss.ts`):
+
+- **All-round sensors.** Peripheral blindness is what makes flanking a line bot work, and the boss
+  does not have it. You flank it by taking its attention elsewhere first, not by driving wide.
+- **It aims at groups.** With a nine-metre blast it puts the shell between two raiders rather than
+  on one, and leads a lone target properly.
+- **It protects its own weak point.** When it picks ground it prefers a wall behind its engine deck,
+  refuses positions where the raid has it ringed, and turns its glacis toward whoever it is fighting
+  when it stops. Reaching the deck is a manoeuvre you have to earn.
+- **It spends abilities on reasons.** *Quake* when raiders stack on it, *Siege Barrage* — a lobbed
+  salvo that does not care about your cover — when they hide or bunch up at range, *Overcharge* when
+  someone is isolated, and *Purge* to throw the raid off it. Each has a wind-up, a kill-feed warning
+  and a pulsing ring at the hull, so every one of them is something you could have avoided.
+- **It will not be waited out.** Disengage completely — nobody in sight and nobody hurting it — and
+  it repairs. It can never repair past the phase gate the raid has already pushed it through, so a
+  long fight is always progress even when it is going badly.
+
+**Phases change tempo, never numbers.** At 66% and 33% its ability cooldowns shorten and its salvos
+grow. A boss that quietly gains armour reads as cheating; a boss that starts firing twice as often
+reads as angry.
+
+**One shared reinforcement pool.** Every raider death — yours or a squadmate's — spends one. Spend
+them all and the dead stay down; lose everyone and the raid is over. If you are the one who is out,
+the camera follows a surviving squadmate rather than an empty respawn timer.
+
+Squadmates run full-tier hulls rather than the bot equipment gap, and a roster picked for a boss
+fight — a body to hold its attention, a healer, then reach. A Rusher's fifteen-metre flamethrower
+can never touch something that holds forty metres, so the raid roster does not field one.
+
+Everything numeric lives in `src/data/raid.ts` and is meant to be tuned.
 
 ## The AI
 
@@ -172,14 +222,15 @@ src/
   core/      loop helpers, input, math
   physics/   cannon-es world, collision layers, vehicle controller
   entities/  tank, weapon, projectile, pickup, status
-  data/      turrets.json, hulls.json, maps/, supplies, modes, difficulty
-  ai/        navgrid, perception, behaviour tree, personas, team board
+  data/      turrets.json, hulls.json, maps/, supplies, modes, difficulty, raid
+  ai/        navgrid, perception, behaviour tree, personas, team board, boss
   render/    scene, procedural textures, materials, tank meshes, effects, camera, HUD
-  modes/     dm, tdm, ctf, cp
+  modes/     dm, tdm, ctf, cp, boss raid
   game/      battle orchestration, overdrives
   ui/        garage and battle setup
 tools/
   validate-maps.mjs
+  raid-smoke.mjs
 ```
 
 ## Map validation
@@ -195,6 +246,23 @@ npm run validate-maps
 builds the app, serves it, and runs the checks in a real browser against the same physics world and
 navgrid the game uses. It verifies that every spawn, flag, control point and supply zone sits on a
 drivable surface at its declared height, and that all of them are mutually reachable.
+
+## Raid balance harness
+
+Raid balance is not eyeballable — the interesting numbers only exist in aggregate.
+
+```bash
+npm run raid-smoke                 # kungur, 400 simulated seconds
+node tools/raid-smoke.mjs silence  # a different map
+```
+
+builds, serves, starts a raid in a real browser and fast-forwards the simulation far faster than
+real time, driving a stand-in player, then reports how long the fight lasted, how much of the
+reinforcement pool it cost, which abilities actually fired, how far the boss travelled, and how much
+of the time the player was in its rear arc. Run it several times — bot pathing makes single runs
+noisy, and it is the spread that tells you whether the mode is tuned. It is what caught the two
+balance bugs that mattered: a repair rate that scaled off the boss's own pool and so out-healed the
+entire squad, and squadmates whose guns could not reach the range the boss holds.
 
 ## Balance figures
 

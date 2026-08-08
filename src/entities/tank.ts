@@ -10,7 +10,7 @@ import { StatusSet } from './status';
 import { Weapon } from './weapon';
 import { buildTankMesh, type TankMesh } from '../render/tankmesh';
 import type { Arena } from '../game/types';
-import type { BotController } from '../ai/bot';
+import type { AiController } from '../ai/controller';
 
 const TMP_FWD = new CANNON.Vec3();
 const TMP_SMOKE = new CANNON.Vec3();
@@ -20,6 +20,9 @@ export interface TankConfig {
   name: string;
   team: TeamId;
   isPlayer: boolean;
+  /** Boss Raid's Overseer. Exempt from the bot equipment gap, and a legal target
+   *  for the raid damage rules. */
+  isBoss?: boolean;
   hull: HullDef;
   turret: TurretDef;
   hullMultiplier: number;
@@ -44,6 +47,7 @@ export class Tank {
   readonly name: string;
   readonly team: TeamId;
   readonly isPlayer: boolean;
+  readonly isBoss: boolean;
   readonly hull: HullDef;
   readonly turretDef: TurretDef;
 
@@ -94,7 +98,7 @@ export class Tank {
   /** Set by CTF/CP modes. */
   carryingFlag: TeamId | null = null;
 
-  ai: BotController | null = null;
+  ai: AiController | null = null;
   /** Populated by the Mammoth rampage overdrive. */
   contactDamage = 0;
   damageReduction = 0;
@@ -109,6 +113,7 @@ export class Tank {
     this.name = cfg.name;
     this.team = cfg.team;
     this.isPlayer = cfg.isPlayer;
+    this.isBoss = cfg.isBoss === true;
 
     // Tier multipliers are the spec's "equipment gap": the player runs top gear,
     // bots run mid gear, and the difference is legible in the garage UI.

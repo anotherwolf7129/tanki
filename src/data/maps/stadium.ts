@@ -21,7 +21,7 @@ export const stadium: MapDef = {
   displayName: 'Stadium',
   size: 'medium',
   maxPlayers: 20,
-  modes: ['DM', 'TDM', 'CTF', 'CP'],
+  modes: ['DM', 'TDM', 'CTF', 'CP', 'RAID'],
   gravityScale: 1.0,
   theme: 'summer',
   bounds: half,

@@ -53,9 +53,20 @@ export const MODES: Record<ModeCode, ModeDef> = {
     flagLimit: null,
     timeLimit: 15 * 60,
   },
+  RAID: {
+    code: 'RAID',
+    displayName: 'Boss Raid',
+    teams: true,
+    blurb:
+      'You and a squad against one enormous, genuinely clever tank. You out-damage your squadmates — which is exactly what pulls its attention onto you.',
+    scoreLimit: null,
+    killLimit: null,
+    flagLimit: null,
+    timeLimit: 12 * 60,
+  },
 };
 
-export const MODE_CODES: ModeCode[] = ['DM', 'TDM', 'CTF', 'CP'];
+export const MODE_CODES: ModeCode[] = ['DM', 'TDM', 'CTF', 'CP', 'RAID'];
 
 export interface BattleSettings {
   mode: ModeCode;

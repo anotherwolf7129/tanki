@@ -7,6 +7,7 @@ import { WORLD_MASK } from '../physics/world';
 import type { Arena } from '../game/types';
 import type { Tank } from '../entities/tank';
 import { action, condition, guard, selector, type Node, type Status } from './behaviour';
+import type { AiController } from './controller';
 import { NavGrid } from './navgrid';
 import { Perception, type Track } from './perception';
 import type { Persona } from './personas';
@@ -39,7 +40,7 @@ type Intent = 'engage' | 'retreat' | 'objective' | 'pickup' | 'patrol' | 'escort
  * accurately once every two seconds with a 600 ms reaction reads as far more
  * alive than one that fires constantly and misses.
  */
-export class BotController {
+export class BotController implements AiController {
   readonly perception: Perception;
   private readonly tree: Node<BotController>;
 

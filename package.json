@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "validate-maps": "node tools/validate-maps.mjs"
+    "validate-maps": "node tools/validate-maps.mjs",
+    "raid-smoke": "node tools/raid-smoke.mjs"
   },
   "dependencies": {
     "cannon-es": "^0.20.0",
