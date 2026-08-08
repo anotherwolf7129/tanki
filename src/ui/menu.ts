@@ -10,11 +10,14 @@ import {
 } from '../data/modes';
 import {
   ALLY_BOSS_DAMAGE,
+  BOSS_CLASS_LETHALITY,
+  BOSS_LETHALITY,
   BREACH_MULTIPLIER,
   PLAYER_BOSS_DAMAGE,
   RAID_PHASES,
+  RESPAWN_BASE,
+  RESPAWN_MAX,
   bossHealth,
-  reinforcementsFor,
 } from '../data/raid';
 import type { ModeCode } from '../data/schema';
 import type { PlayerLoadout } from '../game/battle';
@@ -204,7 +207,7 @@ export class Menu {
             </label>
             ${
               raid
-                ? `<p class="hint">${settings.botCount} allied bots plus you against one Overseer — <b>${bossHealth(settings.botCount, profile.bot.hullTierMultiplier).toLocaleString()}</b> hp, <b>${reinforcementsFor(settings.botCount)}</b> shared reinforcements.</p>`
+                ? `<p class="hint">${settings.botCount} allied bots plus you against one Overseer — <b>${bossHealth(settings.botCount, profile.bot.hullTierMultiplier).toLocaleString()}</b> hp. Reinforcements are unlimited; the clock is not.</p>`
                 : ''
             }
 
@@ -248,8 +251,14 @@ export class Menu {
                 <li>Direct hits on its engine deck ×${BREACH_MULTIPLIER.toFixed(2)} again</li>
                 <li>It targets by accumulated damage — out-damaging the squad pulls it onto you</li>
                 <li>It keeps its back to walls and refuses to be surrounded</li>
-                <li>Break contact for 6 s and it starts repairing</li>
-                <li>${RAID_PHASES.map((p) => `${p.name} at ${Math.round(p.from * 100)}%`).join(' · ')}</li>
+                <li>Break contact for 10 s and it repairs — with kits, boxes and its own reactor</li>
+              </ul>
+              <h3>What it does to you</h3>
+              <ul>
+                <li>Its ordnance lands for ×${(BOSS_LETHALITY * BOSS_CLASS_LETHALITY.light).toFixed(2)} on a light hull, ×${(BOSS_LETHALITY * BOSS_CLASS_LETHALITY.medium).toFixed(2)} medium, ×${(BOSS_LETHALITY * BOSS_CLASS_LETHALITY.heavy).toFixed(2)} heavy — one shell nearly kills a light</li>
+                <li>Structural Collapse drops the cover you are using onto you; open ground is the only answer</li>
+                <li>Unlimited reinforcements — but the wait climbs from ${RESPAWN_BASE}s toward ${RESPAWN_MAX}s as the squad dies</li>
+                <li>${RAID_PHASES.map((p) => `${p.name} ${Math.round(p.from * 100)}% (${p.salvo}×)`).join(' · ')}</li>
               </ul>
             </div>`
                 : ''

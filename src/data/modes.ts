@@ -100,11 +100,12 @@ export const MODES: Record<ModeCode, ModeDef> = {
     displayName: 'Boss Raid',
     teams: true,
     blurb:
-      'You and a squad against one enormous, genuinely clever tank. You out-damage your squadmates — which is exactly what pulls its attention onto you.',
-    // A raid ends when the Overseer or the reinforcement pool does. There is
-    // nothing to race to.
+      'You and a squad against one enormous, genuinely clever tank that almost kills a light hull with a single shell, brings the map down on you and goes berserk on the way out. Reinforcements are unlimited; the clock is not.',
+    // A raid ends when the Overseer falls or the clock does. Nobody is ever out
+    // of lives, so there is nothing to race to but the health bar — and with a
+    // boss this hard the clock is the loss condition, so it is a generous one.
     limit: null,
-    timeLimit: 12 * 60,
+    timeLimit: 15 * 60,
   },
 };
 

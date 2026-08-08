@@ -4,9 +4,10 @@
  * actually happened.
  *
  * Raid balance is not eyeballable — the fight is four allied bots, one boss and
- * a five-minute clock, and the interesting numbers (how long it lasts, whether
- * the reinforcement pool holds, whether the boss's repair is undoing progress,
- * whether every ability actually fires) only exist in aggregate. This is what
+ * a five-minute clock, and the interesting numbers (how long it lasts, how much
+ * of it the squad spends in the respawn queue, whether the boss's repair is
+ * undoing progress, whether every ability actually fires) only exist in
+ * aggregate. This is what
  * caught the two balance bugs that mattered: a repair rate that scaled off the
  * boss's own pool and out-healed the whole squad, and squadmates whose guns
  * could not reach the range the boss holds.
@@ -104,7 +105,9 @@ try {
           if (snap.boss.targetingPlayer) aggroOnPlayer += 1;
         }
         if (snap.over) { seen.notes.push(`over at ${(i / 60).toFixed(0)}s: ${snap.winner} — ${snap.reason}`); break; }
-        bossMoved += boss.position.distanceTo(last);
+        // A destroyed tank is parked far below the arena, so sampling its
+        // position while it is down reports the trip to the car park as travel.
+        if (boss.alive) bossMoved += boss.position.distanceTo(last);
         last = boss.position.clone();
 
         if (player.alive && boss.alive) {
@@ -130,7 +133,12 @@ try {
       bossDamageDealt: Math.round(boss.damageDealt),
       telegraphsSeen: [...seen.telegraphs],
       phasesSeen: [...seen.phases],
-      reinforcements: snap.boss?.reinforcements,
+      squadLosses: snap.boss?.losses,
+      respawnDelay: snap.boss?.respawnDelay,
+      bossEnraged: snap.boss?.enraged,
+      bossSupplies: Object.fromEntries(
+        Object.entries(boss.supplies).map(([k, v]) => [k, v.count]),
+      ),
       targetingPlayer: snap.boss?.targetingPlayer,
       playerThreat: Math.round((snap.boss?.playerThreat ?? 0) * 100),
       hudLine: snap.modeLine,

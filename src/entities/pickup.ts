@@ -178,6 +178,11 @@ export class PickupSystem {
     tank.giveSupply(p.kind);
     if (tank.isPlayer) {
       arena.notify(`Picked up ${SUPPLIES[p.kind].displayName}`, 'info');
+    } else if (tank.isBoss) {
+      // The raid boss banks it rather than burning it on pickup: its own logic
+      // decides when a kit is worth spending, and the raid gets told it lost the
+      // box so that contesting one reads as having mattered.
+      arena.notify(`${tank.name} took the ${SUPPLIES[p.kind].displayName}`, 'warning');
     } else if (Math.random() < 0.7) {
       tank.applySupply(p.kind, arena);
       tank.supplies[p.kind].count = Math.max(0, tank.supplies[p.kind].count - 1);

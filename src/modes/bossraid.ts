@@ -2,13 +2,15 @@ import * as CANNON from 'cannon-es';
 import type { ModeCode, TeamId } from '../data/schema';
 import {
   ALLY_BOSS_DAMAGE,
+  BOSS_CLASS_LETHALITY,
+  BOSS_LETHALITY,
   BREACH_COS,
   BREACH_MULTIPLIER,
   PLAYER_BOSS_DAMAGE,
   POINTS_PER_DAMAGE,
   phaseFor,
   RAID_PHASES,
-  reinforcementsFor,
+  respawnDelayFor,
   type RaidPhase,
 } from '../data/raid';
 import type { BossController } from '../ai/boss';
@@ -32,8 +34,12 @@ const TMP_FORWARD = new CANNON.Vec3();
  * - Direct hits on the boss's engine deck — the rear arc — land for half again.
  *   It knows this, keeps its back to walls and turns to face whoever hurts it
  *   most, so a breach is a manoeuvre rather than an accident.
- * - Deaths come out of one shared reinforcement pool. Spend it and the dead
- *   stay dead; lose everyone and the raid is over.
+ * - Its shells are siege ordnance, sized against armour rather than against
+ *   tanks. A light hull comes out of a direct hit on a sliver; a heavy one is
+ *   the reason to bring a heavy one.
+ * - Nobody runs out of lives. What a death costs is time, and the price climbs
+ *   with every death the raid has already taken — while the boss, left alone,
+ *   repairs.
  */
 export class BossRaidMode extends BaseMode {
   readonly code: ModeCode = 'RAID';
@@ -41,16 +47,14 @@ export class BossRaidMode extends BaseMode {
 
   private boss: Tank | null = null;
   private bossAi: BossController | null = null;
-  private reinforcements = 0;
-  private readonly down = new Set<number>();
+  private losses = 0;
   private bossDownAt: number | null = null;
   private readonly damageSeen = new Map<number, number>();
 
   /** Called by the battle once the Overseer and its squad exist. */
-  bindBoss(boss: Tank, ai: BossController, allyCount: number): void {
+  bindBoss(boss: Tank, ai: BossController): void {
     this.boss = boss;
     this.bossAi = ai;
-    this.reinforcements = reinforcementsFor(allyCount);
   }
 
   get phase(): RaidPhase {
@@ -60,12 +64,27 @@ export class BossRaidMode extends BaseMode {
   // ---- raid rules -------------------------------------------------------
 
   /**
-   * The damage asymmetry, in one place. Every number here is quoted in the
-   * garage's raid ledger — an advantage the player can read is an advantage
-   * that feels earned.
+   * The damage asymmetry, in one place — both directions. Every number here is
+   * quoted in the garage's raid ledger: an advantage the player can read is an
+   * advantage that feels earned, and so is a threat.
    */
-  override damageScale(target: Tank, source: Tank | null, opts: DamageOptions, arena: Arena): number {
-    if (!this.boss || target !== this.boss || !source || source === target) return 1;
+  override damageScale(
+    target: Tank,
+    source: Tank | null,
+    opts: DamageOptions,
+    arena: Arena,
+    _amount: number,
+  ): number {
+    if (!this.boss || !source || source === target) return 1;
+
+    // Outbound: siege ordnance. The Overseer's gun was authored to fight tanks
+    // and it is besieging them instead, so everything it does lands harder, and
+    // hardest of all on the hulls that were never built to take a shell.
+    if (source === this.boss) {
+      return BOSS_LETHALITY * (BOSS_CLASS_LETHALITY[target.hull.class] ?? 1);
+    }
+
+    if (target !== this.boss) return 1;
 
     let scale = source.isPlayer ? PLAYER_BOSS_DAMAGE : ALLY_BOSS_DAMAGE;
 
@@ -87,9 +106,20 @@ export class BossRaidMode extends BaseMode {
     return (dx * forward.x + dz * forward.z) / len < BREACH_COS;
   }
 
+  /** The squad always comes back. Only the Overseer stays down. */
   override canRespawn(tank: Tank, _arena: Arena): boolean {
-    if (tank === this.boss) return false;
-    return !this.down.has(tank.id);
+    return tank !== this.boss;
+  }
+
+  /**
+   * What a death costs. The pool is gone — nobody is ever benched — so the
+   * price is the walk back, and it lengthens with every loss the raid has taken.
+   * A squad that is trading badly spends more and more of the fight in the
+   * respawn queue, which is exactly the stretch the boss spends repairing.
+   */
+  override respawnDelay(tank: Tank, _arena: Arena): number | null {
+    if (tank === this.boss) return null;
+    return respawnDelayFor(this.losses);
   }
 
   override onDeath(victim: Tank, arena: Arena): void {
@@ -98,16 +128,12 @@ export class BossRaidMode extends BaseMode {
       arena.notify(`${victim.name} is down — raid complete`, 'gold');
       return;
     }
-    if (this.reinforcements > 0) {
-      this.reinforcements -= 1;
-      arena.notify(
-        `${victim.isPlayer ? 'You went' : `${victim.name} went`} down — ${this.reinforcements} reinforcements left`,
-        this.reinforcements <= 2 ? 'warning' : 'info',
-      );
-      return;
-    }
-    this.down.add(victim.id);
-    arena.notify(`${victim.isPlayer ? 'You are' : `${victim.name} is`} out of the fight`, 'warning');
+    this.losses += 1;
+    const wait = respawnDelayFor(this.losses).toFixed(1);
+    arena.notify(
+      `${victim.isPlayer ? 'You went' : `${victim.name} went`} down — the squad is back in ${wait}s`,
+      victim.isPlayer ? 'warning' : 'info',
+    );
   }
 
   override onKill(killer: Tank | null, victim: Tank, arena: Arena): void {
@@ -195,10 +221,11 @@ export class BossRaidMode extends BaseMode {
       phaseMarks: RAID_PHASES.filter((p) => p.from < 1).map((p) => p.from),
       targetingPlayer: !!player && this.bossAi?.target === player,
       playerThreat: player && this.bossAi ? this.bossAi.threatShare(player) : 0,
-      reinforcements: this.reinforcements,
+      losses: this.losses,
+      respawnDelay: respawnDelayFor(this.losses),
+      enraged: phase.enraged === true,
       telegraph: this.bossAi?.telegraphName ?? null,
       telegraphProgress: this.bossAi?.telegraphProgress ?? 0,
-      playerOut: !!player && this.down.has(player.id),
     };
   }
 
@@ -222,11 +249,9 @@ export class BossRaidMode extends BaseMode {
       };
     }
 
-    const standing = arena.tanks.some((t) => t !== this.boss && t.alive);
-    if (!standing && this.reinforcements <= 0) {
-      return { over: true, winner: this.boss.name, reason: 'Raid wiped' };
-    }
-
+    // A wipe is no longer a loss — the squad always comes back. The only way
+    // the Overseer wins is by still being standing when the clock runs out,
+    // which is what makes every second spent dead expensive.
     if (elapsed >= arena.settings.timeLimit) {
       return { over: true, winner: this.boss.name, reason: 'The Overseer held out' };
     }

@@ -154,7 +154,12 @@ export class OverdriveSystem {
         tank.status.apply('nitro', 1, od.duration ?? 10, tank.id);
         break;
       case 'healAndRepel': {
-        arena.heal(tank, tank.maxHealth * (od.healFraction ?? 1), tank);
+        const healed = arena.heal(tank, tank.maxHealth * (od.healFraction ?? 1), tank);
+        // The raid boss venting its reactor is a thing the raid needs told: it
+        // is the one heal it has that nobody can interrupt.
+        if (healed > 0 && tank.isBoss) {
+          arena.notify(`${tank.name} vented its reactor and repaired ${Math.round(healed)}`, 'warning');
+        }
         const radius = od.radius ?? 24;
         for (const t of arena.tanks) {
           if (t === tank || !t.alive || !arena.areEnemies(tank, t)) continue;

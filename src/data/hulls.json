@@ -300,7 +300,7 @@
       "id": "purge",
       "displayName": "Purge",
       "radius": 26,
-      "healFraction": 0.05,
+      "healFraction": 0.08,
       "launchImpulse": 26,
       "effect": "healAndRepel"
     }

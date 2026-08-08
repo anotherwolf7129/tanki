@@ -268,11 +268,19 @@ export class Hud {
     ctx.fillStyle = boss.healthFraction > 0 ? '#f87171' : '#9aa4b2';
     ctx.fillText(boss.name, x, y - 10);
     ctx.font = '600 11px system-ui, sans-serif';
-    ctx.fillStyle = '#9aa4b2';
-    ctx.fillText(`PHASE ${boss.phase} · ${boss.phaseName.toUpperCase()}`, x + 100, y - 10);
+    // Berserk is the one phase worth colouring, and it pulses so that it reads
+    // as a state the boss is in rather than a label it has always had.
+    ctx.fillStyle = boss.enraged ? (Math.sin(time * 8) > 0 ? '#f87171' : '#fbbf24') : '#9aa4b2';
+    ctx.fillText(
+      `PHASE ${boss.phase} · ${boss.phaseName.toUpperCase()}${boss.enraged ? ' · BERSERK' : ''}`,
+      x + 100,
+      y - 10,
+    );
+    // Reinforcements are unlimited, so what is worth showing is the price the
+    // raid is now paying for a death.
     ctx.textAlign = 'right';
-    ctx.fillStyle = boss.reinforcements <= 2 ? '#fbbf24' : '#9aa4b2';
-    ctx.fillText(`${boss.reinforcements} REINFORCEMENTS`, x + width, y - 10);
+    ctx.fillStyle = boss.respawnDelay >= 10 ? '#fbbf24' : '#9aa4b2';
+    ctx.fillText(`${boss.losses} LOSSES · RESPAWN ${boss.respawnDelay.toFixed(1)}s`, x + width, y - 10);
 
     ctx.fillStyle = 'rgba(255,255,255,0.1)';
     roundRect(ctx, x, y, width, 18, 4);
@@ -641,25 +649,26 @@ export class Hud {
 
   private drawRespawn(snap: BattleSnapshot, w: number, h: number): void {
     const ctx = this.ctx;
-    const out = snap.boss?.playerOut === true;
     ctx.save();
     ctx.fillStyle = 'rgba(8,10,14,0.45)';
     ctx.fillRect(0, 0, w, h);
     ctx.textAlign = 'center';
-    ctx.fillStyle = out ? '#f87171' : '#e6edf5';
+    ctx.fillStyle = '#e6edf5';
     ctx.font = '700 34px system-ui, sans-serif';
-    ctx.fillText(out ? 'NO REINFORCEMENTS' : 'DESTROYED', w / 2, h / 2 - 20);
+    ctx.fillText('DESTROYED', w / 2, h / 2 - 20);
     ctx.font = '600 18px system-ui, sans-serif';
     ctx.fillStyle = '#9aa4b2';
-    ctx.fillText(
-      out
-        ? snap.viewing === snap.player
-          ? 'The raid is over'
-          : `Watching ${snap.viewing.name} — your squad is still up`
-        : `Respawning in ${Math.max(0, snap.player.respawnTimer).toFixed(1)}s`,
-      w / 2,
-      h / 2 + 16,
-    );
+    ctx.fillText(`Respawning in ${Math.max(0, snap.player.respawnTimer).toFixed(1)}s`, w / 2, h / 2 + 16);
+    // In a raid the wait itself is the resource: say why it is getting longer.
+    if (snap.boss) {
+      ctx.font = '600 14px system-ui, sans-serif';
+      ctx.fillStyle = '#fbbf24';
+      ctx.fillText(
+        `${snap.boss.losses} squad losses — every one of them buys ${snap.boss.name} time to repair`,
+        w / 2,
+        h / 2 + 46,
+      );
+    }
     ctx.restore();
   }
 
