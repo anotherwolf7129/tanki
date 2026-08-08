@@ -159,22 +159,14 @@ export class ControlPointsMode extends BaseMode {
   }
 
   result(elapsed: number, arena: Arena): ModeResult {
-    const limit = arena.settings.scoreLimit;
-    if (limit != null) {
-      for (const team of ['red', 'blue'] as const) {
-        if (this.scores[team] >= limit) {
-          return { over: true, winner: team === 'red' ? 'Red' : 'Blue', reason: `${limit} points` };
-        }
-      }
-    }
-    return this.timeUp(elapsed, arena) ?? { over: false };
+    return this.teamLimitReached(arena, 'points') ?? this.timeUp(elapsed, arena) ?? { over: false };
   }
 
-  hudLine(playerTeam: TeamId): string {
+  hudLine(playerTeam: TeamId, arena: Arena): string {
     const mine = playerTeam === 'blue' ? this.scores.blue : this.scores.red;
     const theirs = playerTeam === 'blue' ? this.scores.red : this.scores.blue;
     const held = this.points.filter((p) => p.owner === (playerTeam === 'blue' ? 'blue' : 'red')).length;
-    return `${Math.floor(mine)} — ${Math.floor(theirs)}  ·  ${held}/${this.points.length} held`;
+    return `${Math.floor(mine)} — ${Math.floor(theirs)}  ·  ${held}/${this.points.length} held${this.limitLine(arena)}`;
   }
 
   override markers(): MinimapMarker[] {

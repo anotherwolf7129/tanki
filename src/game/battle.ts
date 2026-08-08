@@ -719,7 +719,7 @@ export class Battle implements Arena {
       elapsed: this.elapsed,
       timeLimit: this.settings.timeLimit,
       modeCode: this.settings.mode,
-      modeLine: this.mode.hudLine(this.player.team),
+      modeLine: this.mode.hudLine(this.player.team, this),
       notifications: this.notifications,
       scoreboard,
       teamScores: this.mode.teamScores(),

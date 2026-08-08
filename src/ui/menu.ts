@@ -1,7 +1,13 @@
 import { HULLS, HULL_IDS, TURRETS, TURRET_IDS, preferredRange } from '../data';
 import { DIFFICULTIES, DIFFICULTY_IDS } from '../data/difficulty';
 import { MAPS, MAP_IDS, mapsForMode } from '../data/maps';
-import { DEFAULT_SETTINGS, MODES, MODE_CODES, type BattleSettings } from '../data/modes';
+import {
+  DEFAULT_SETTINGS,
+  MODES,
+  MODE_CODES,
+  type BattleSettings,
+  type LimitSpec,
+} from '../data/modes';
 import {
   ALLY_BOSS_DAMAGE,
   BREACH_MULTIPLIER,
@@ -35,7 +41,14 @@ function load(): Persisted {
     if (!raw) return fallback;
     const parsed = JSON.parse(raw) as Partial<Persisted>;
     return {
-      settings: { ...fallback.settings, ...parsed.settings },
+      settings: {
+        ...fallback.settings,
+        ...parsed.settings,
+        // Merged per mode rather than wholesale: a setup saved before a mode
+        // existed — or before limits were per mode at all — must still come
+        // back with a win condition for every mode in the list.
+        limits: { ...fallback.settings.limits, ...(parsed.settings?.limits ?? {}) },
+      },
       loadout: { ...fallback.loadout, ...parsed.loadout },
     };
   } catch {
@@ -88,11 +101,18 @@ export class Menu {
     const hull = HULLS[loadout.hull];
     const turret = TURRETS[loadout.turret];
     const [near, far] = preferredRange(turret);
+    // Gauss only splashes on its super shot, which is still a reason to show
+    // the blast radius on the card — it is why you hold the trigger.
+    const blast = turret.splash ?? turret.alt?.splash;
 
     const availableMaps = mapsForMode(settings.mode);
     if (!availableMaps.includes(settings.mapId)) settings.mapId = availableMaps[0] ?? MAP_IDS[0];
     const mapChoice = MAPS[settings.mapId];
     const raid = settings.mode === 'RAID';
+    // Each mode races to its own number in its own unit, so the slider is
+    // rebuilt from the mode rather than being one shared "kill limit".
+    const limitSpec = MODES[settings.mode].limit;
+    const limitValue = settings.limits[settings.mode] ?? 0;
     // A raid is a squad, not a lobby: the boss takes a slot, and past five
     // allies the player stops being the thing that kills it.
     const maxBots = raid
@@ -151,6 +171,7 @@ export class Menu {
               <span><b>${turret.reloadTime.toFixed(2)}</b>s reload</span>
               <span><b>${turret.rotationSpeed}</b> °/s</span>
               <span><b>${Math.round(near)}–${Math.round(far)}</b> m band</span>
+              ${blast ? `<span><b>${blast.radius}</b> m blast</span>` : ''}
               ${(turret.special ?? []).map((s) => `<span class="tag">${s}</span>`).join('')}
             </div>
           </section>
@@ -190,6 +211,15 @@ export class Menu {
             <label>Time limit <output id="timeOut">${Math.round(settings.timeLimit / 60)} min</output>
               <input id="time" type="range" min="2" max="15" value="${Math.round(settings.timeLimit / 60)}" />
             </label>
+
+            ${
+              limitSpec
+                ? `<label>${limitSpec.label} <output id="limitOut">${limitLabel(limitValue, limitSpec)}</output>
+              <input id="limit" type="range" min="0" max="${limitSpec.max}" step="${limitSpec.step}" value="${limitValue}" />
+            </label>
+            <p class="hint">${limitSpec.hint} Slide to zero for no limit, and the clock alone ends the battle.</p>`
+                : ''
+            }
 
             <div class="toggles">
               <label class="check"><input id="ff" type="checkbox" ${settings.friendlyFire ? 'checked' : ''} /> Friendly fire</label>
@@ -304,6 +334,13 @@ export class Menu {
       settings.timeLimit = minutes * 60;
       q<HTMLOutputElement>('#timeOut').textContent = `${minutes} min`;
     });
+    const limitSpec = MODES[settings.mode].limit;
+    const limitInput = this.root.querySelector<HTMLInputElement>('#limit');
+    limitInput?.addEventListener('input', (e) => {
+      const value = Number((e.target as HTMLInputElement).value);
+      settings.limits[settings.mode] = value > 0 ? value : null;
+      if (limitSpec) q<HTMLOutputElement>('#limitOut').textContent = limitLabel(value, limitSpec);
+    });
     q<HTMLInputElement>('#ff').addEventListener('change', (e) => {
       settings.friendlyFire = (e.target as HTMLInputElement).checked;
     });
@@ -321,7 +358,12 @@ export class Menu {
     }
     q<HTMLButtonElement>('#start').addEventListener('click', () => {
       save(this.state);
-      this.onStart?.({ settings: { ...settings }, loadout: { ...loadout } });
+      // `limits` is copied too, so editing the setup of a later battle cannot
+      // reach back into the one already running.
+      this.onStart?.({
+        settings: { ...settings, limits: { ...settings.limits } },
+        loadout: { ...loadout },
+      });
     });
   }
 
@@ -329,6 +371,10 @@ export class Menu {
     save(this.state);
     this.render();
   }
+}
+
+function limitLabel(value: number, spec: LimitSpec): string {
+  return value > 0 ? `${value} ${spec.unit}` : 'No limit';
 }
 
 function overdriveBlurb(effect: string): string {

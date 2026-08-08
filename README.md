@@ -26,7 +26,7 @@ The game is keyboard-only. There is no mouse input and no pointer capture.
 | `1`–`5` | Repair Kit / Double Armor / Double Damage / Speed Boost / Mine |
 | `R` | Flip an overturned hull |
 | `V` | Toggle first person |
-| `−` `=` | Camera boom in / out |
+| `−` `=` | Camera boom out / in |
 | `K` (hold 5 s) | Self destruct |
 | `Tab` | Scoreboard |
 | `Esc` | Garage / battle setup |
@@ -85,6 +85,21 @@ announced, marked on the minimap, dropped from the sky, and contested by the bot
 **Five modes**: Deathmatch, Team Deathmatch, Capture the Flag (with the wiki's pickup/transfer/
 delivery scoring, banked and only paid out on delivery), Control Points, and **Boss Raid** — you and
 a squad against one Overseer, described in its own section below.
+
+Every mode except the raid races to a number as well as running a clock, and the setup screen sets
+that number in the mode's own unit: kills for Deathmatch (one player's own total), team kills for
+Team Deathmatch, deliveries for Capture the Flag, accrued score for Control Points. Each mode
+remembers its own value, because they do not fill at the same rate — 30 is a long Deathmatch and a
+three-minute Team Deathmatch, which is why one shared limit ended a TDM before it had started. Slide
+the limit to zero and only the clock ends the battle. The HUD prints the target next to the score.
+
+**Area damage** is data-driven from a `splash` block in `turrets.json`, and any turret that declares
+one delivers it however it fires — shell, bounced shell, pellet, missile or hitscan beam. The blast
+falls off linearly from `damageMax` at the centre to `damageMin` at the rim, is blocked by walls but
+not by tanks, hurts the shooter when the turret sets `selfDamage`, and scales with the same
+multipliers as a direct hit, so Double Damage lifts the whole shell rather than half of it. Thunder,
+Magnum, Striker, Cataclysm and the Gauss super shot are the turrets that carry one; the garage card
+shows the radius.
 
 **Seven maps** assembled from a 5 m prop kit: Sandbox, Silence, Kungur, Rio, Polygon, Stadium and
 low-gravity Madness. Geometry is original primitives, not ripped assets.

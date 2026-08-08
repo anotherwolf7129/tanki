@@ -203,7 +203,7 @@ export class BossRaidMode extends BaseMode {
   }
 
   /** Short: the boss bar below the clock already carries the detail. */
-  override hudLine(_playerTeam: TeamId): string {
+  override hudLine(_playerTeam: TeamId, _arena: Arena): string {
     if (!this.boss) return 'Boss Raid';
     const phase = this.phase;
     return `Phase ${phase.index} · ${phase.name}`;
