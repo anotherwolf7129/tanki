@@ -412,6 +412,7 @@ export class Battle implements Arena {
 
     target.health -= dmg;
     target.interruptHeal();
+    if (selfInflicted) target.selfDamageTaken += dmg;
     if (source && !selfInflicted) {
       target.lastAttacker = source;
       target.lastAttackedAt = this.time;

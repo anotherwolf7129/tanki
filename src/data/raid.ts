@@ -412,8 +412,9 @@ export const METEOR_SPLASH_MIN = 320;
 export const METEOR_IMPULSE = 20;
 export const METEOR_SHELL_RADIUS = 0.85;
 /**
- * The share of its own bombardment the Overseer takes. Armoured against
- * ordnance it designed, not immune to it.
+ * The share of its own ordnance the Overseer takes — storm, barrage and the
+ * blast off its own main gun alike. Armoured against weapons it designed, not
+ * immune to them.
  *
  * A quarter, and that number was measured rather than picked. At a half, a
  * berserk Overseer — which charges raiders, and therefore charges the ground it
@@ -422,7 +423,39 @@ export const METEOR_SHELL_RADIUS = 0.85;
  * a real bonus for holding your ground under a storm, and still the occasional
  * killing blow, without ever being the raid's main source of damage.
  */
-export const METEOR_SELF_DAMAGE = 0.25;
+export const BOSS_SELF_DAMAGE = 0.25;
+
+/**
+ * Blast discipline — the rule that makes the Overseer's own splash a constraint
+ * on it rather than a fact about it.
+ *
+ * Its gun throws a nine-metre detonation and it is now inside that number like
+ * everybody else, so it will not pull the trigger when the round — or any shell
+ * in the fan behind it — would land inside this multiple of its own blast
+ * radius. That is what stops a boss with its back to a wall firing into the
+ * wall, and what stops a berserk one that has closed to ramming distance
+ * detonating a siege shell on its own glacis.
+ *
+ * Enough clearance to keep the whole blast off itself, and no more: a boss that
+ * refuses to shoot anything inside thirty metres is a boss you beat by walking
+ * up to it.
+ */
+export const BLAST_CLEARANCE = 1.15;
+/**
+ * And what it learns the hard way. Geometry cannot predict a raider reversing
+ * into the shell, or a rock landing where the boss is about to shoot, so every
+ * blast that does catch it widens the ring it refuses to fire inside. The first
+ * one is announced — it *shoots once and works it out*, which reads as a thing
+ * that thinks rather than a thing that was written not to miss.
+ */
+export const BLAST_LESSON_STEP = 0.18;
+export const BLAST_CLEARANCE_MAX = 1.7;
+/**
+ * Seconds a shot it will not take keeps the boss looking for better ground.
+ * Long enough to survive the gap between two decision ticks, short enough that
+ * the raider stepping back out of its face un-jams the gun immediately.
+ */
+export const BLAST_HOLD = 1.2;
 
 export const BARRAGE_SPEED = 78;
 export const BARRAGE_GRAVITY = 24;

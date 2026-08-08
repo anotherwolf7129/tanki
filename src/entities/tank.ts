@@ -90,6 +90,13 @@ export class Tank {
   score = 0;
   crystals = 0;
   damageDealt = 0;
+  /**
+   * Damage this tank has done to itself — its own blast, its own overheating
+   * barrel. Kept apart from `damageDealt` because it is nobody's score, and
+   * because it is the only honest signal an AI has that its last shot was a
+   * mistake it should not repeat.
+   */
+  selfDamageTaken = 0;
   lastAttacker: Tank | null = null;
   lastAttackedAt = -999;
   lastHitProtectionAt = -999;

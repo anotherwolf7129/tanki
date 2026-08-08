@@ -8,6 +8,10 @@ import {
   BARRAGE_SPEED,
   BARRAGE_SPLASH_RADIUS,
   BARRAGE_SPREAD,
+  BLAST_CLEARANCE,
+  BLAST_CLEARANCE_MAX,
+  BLAST_HOLD,
+  BLAST_LESSON_STEP,
   BOSS_ABILITIES,
   BOSS_BOX_AT,
   BOSS_BOX_REACH,
@@ -54,7 +58,7 @@ import {
 } from '../data/raid';
 import type { SupplyKind } from '../data/schema';
 import { angleDelta, ballisticPitch, clamp, DEG, predictIntercept, randRange } from '../core/mathx';
-import { WORLD_MASK } from '../physics/world';
+import { SHOT_MASK, WORLD_MASK } from '../physics/world';
 import type { Arena } from '../game/types';
 import type { Tank } from '../entities/tank';
 import type { AiController } from './controller';
@@ -121,6 +125,13 @@ interface Storm {
  *   table. You flank it by taking its attention elsewhere first.
  * - **It aims at groups, not tanks.** With a nine-metre blast it puts the shell
  *   between two raiders rather than on one.
+ * - **It is inside its own blast radius, and it knows it.** Everything it fires
+ *   can hurt it, so before every trigger pull it traces the barrel line it is
+ *   actually pointing down — plus every shell in the fan behind it — and holds
+ *   fire if any of it would detonate close enough to come back. It will not
+ *   shoot the wall it has backed against, or the raider hugging its glacis; it
+ *   backs off and reaches for a Quake instead. Whenever it does catch itself
+ *   anyway, it widens that ring: it shoots once and works the rest out.
  * - **It protects its own weak point.** It prefers ground with a wall behind it
  *   and refuses to be surrounded, because its engine deck is where the damage
  *   is. Reaching that deck is a manoeuvre you have to earn.
@@ -173,6 +184,17 @@ export class BossController implements AiController {
 
   private lastPhase = 1;
   private boxGoal: CANNON.Vec3 | null = null;
+
+  /** Multiple of its own blast radius it refuses to put a shell inside. */
+  private blastClearance = BLAST_CLEARANCE;
+  /** True while the shot it wants would land close enough to catch it. */
+  private blastUnsafe = false;
+  private blastHoldUntil = -1;
+  /** Self-damage already accounted for, so each new blast is only learned once. */
+  private selfHarmSeen = 0;
+  private learnedBlast = false;
+  /** When the last rock of the current storm can no longer be in the air. */
+  private stormSettlesAt = -1;
 
   private path: CANNON.Vec3[] = [];
   private pathIndex = 0;
@@ -249,6 +271,8 @@ export class BossController implements AiController {
       this.decayThreat(TICK);
       this.target = this.pickTarget();
       this.checkPhase();
+      this.learnFromSelfHarm();
+      this.updateBlastGuard();
       this.considerAbility(now);
       this.considerSupplies();
       this.considerOverdrive();
@@ -274,6 +298,7 @@ export class BossController implements AiController {
     this.path = [];
     this.goal = null;
     this.boxGoal = null;
+    this.blastUnsafe = false;
   }
 
   /**
@@ -284,6 +309,11 @@ export class BossController implements AiController {
    * The fan is what makes an angry boss dangerous without touching a single
    * damage number: four shells at four degrees means the gap you were dodging
    * into is now also where a shell is going.
+   *
+   * Every shell in it carries the gun's own `selfDamage`, so the outside rounds
+   * are as capable of coming back as the middle one — which is exactly why the
+   * blast guard clears the whole fan before the trigger is pulled rather than
+   * only the line to the target.
    */
   onFired(): void {
     const phase = this.deps.phase();
@@ -314,7 +344,7 @@ export class BossController implements AiController {
         damage: turret.damage * scale,
         weakDamage: turret.weakDamage * scale,
         impactForce: turret.impactForce,
-        selfDamage: false,
+        selfDamage: turret.selfDamage,
         colour: 0xff8844,
         radius: 0.34,
         splash: turret.splash
@@ -532,7 +562,122 @@ export class BossController implements AiController {
       return;
     }
 
+    // Last gate, and the only one that is about the boss rather than the shot:
+    // a siege round that detonates on its own hull is damage the raid did not
+    // have to do. The ray work behind this runs on the decision tick; the range
+    // check is re-read here because a raider closing the last few metres is
+    // exactly the case that must not wait a tenth of a second.
+    const safe = this.safeBlastDistance();
+    if (safe > 0 && (this.blastUnsafe || this.self.centre().distanceTo(target) < safe)) {
+      this.blastHoldUntil = this.deps.arena.time + BLAST_HOLD;
+      weapon.intent.fire = false;
+      return;
+    }
+
     weapon.intent.fire = true;
+  }
+
+  // ---- blast discipline -------------------------------------------------
+
+  /** Radius its own gun can reach it at, or 0 for a gun that cannot. */
+  private get selfBlastRadius(): number {
+    const turret = this.self.turretDef;
+    return turret.selfDamage && turret.splash ? turret.splash.radius : 0;
+  }
+
+  /**
+   * How far away a detonation has to be before it is somebody else's problem.
+   * Measured from the hull centre, because that is the point `Battle.splash`
+   * measures to — no hull half-span here, or the two would double-count.
+   */
+  private safeBlastDistance(): number {
+    return this.selfBlastRadius * this.blastClearance;
+  }
+
+  /**
+   * Whether the pull it is lined up on would come back at it. Traced from the
+   * barrel it is *actually* pointing down rather than from the line to the
+   * target, so the wall it has backed against, the lip of ground in front of
+   * its tracks and the raider hugging its glacis are all things it can see
+   * coming — and traced once per shell in the phase's fan, since it is the
+   * outside rounds that find the wall the middle one clears.
+   *
+   * Cheap enough to run at 10 Hz on a turret this slow, and cached for the
+   * frames in between.
+   */
+  private updateBlastGuard(): void {
+    const safe = this.safeBlastDistance();
+    const track = this.currentTrack();
+    const unsafe = safe > 0 && !!track && track.visible && this.shotCatchesSelf(track.tank.centre(), safe);
+
+    // A gun it cannot use is a position it should not be in: repositioning is
+    // the answer to being crowded, so the next tick picks new ground instead of
+    // sitting out the rest of the current goal's timer.
+    if (unsafe && !this.blastUnsafe) this.goalTimer = 0;
+    if (unsafe) this.blastHoldUntil = this.deps.arena.time + BLAST_HOLD;
+    this.blastUnsafe = unsafe;
+  }
+
+  /** True while it has recently refused a shot for being too close to it. */
+  private get blastLocked(): boolean {
+    return this.deps.arena.time < this.blastHoldUntil;
+  }
+
+  private shotCatchesSelf(target: CANNON.Vec3, safe: number): boolean {
+    const centre = this.self.centre();
+    // The target itself first, and without a ray: a raider inside the blast is
+    // a raider the gun has no answer to, wall or no wall.
+    if (centre.distanceTo(target) < safe) return true;
+
+    const phys = this.deps.arena.phys;
+    const body = this.self.vehicle.body;
+    const phase = this.deps.phase();
+    const muzzle = this.self.muzzle(new CANNON.Vec3());
+    const base = this.self.aimDirection(new CANNON.Vec3());
+    // No further than the shot is going: geometry behind the target is not
+    // something this pull is ever going to detonate on.
+    const reach = Math.min(
+      muzzle.distanceTo(target) + this.selfBlastRadius,
+      this.self.turretDef.hardCap ?? this.self.turretDef.rangeMinDamage,
+    );
+
+    for (let i = 0; i < phase.salvo; i++) {
+      // Same fan the salvo is actually spawned with, i = 0 being the round the
+      // weapon itself fires down the middle.
+      const side = i % 2 === 0 ? 1 : -1;
+      const step = Math.ceil(i / 2) * phase.salvoSpreadDeg * DEG * side;
+      const cos = Math.cos(step);
+      const sin = Math.sin(step);
+      const dir = new CANNON.Vec3(base.x * cos + base.z * sin, base.y, base.z * cos - base.x * sin);
+      // Tanks included: another raider standing between it and its target is a
+      // detonation point too, and one it did not choose.
+      const hit = phys.raycast(muzzle, muzzle.vadd(dir.scale(reach)), SHOT_MASK, body);
+      if (hit && hit.point.distanceTo(centre) < safe) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The half of this the geometry cannot do. A raider that reverses into the
+   * shell, a rock landing where the boss was about to fire, a blast round a
+   * corner the ray never saw — whatever the reason, ordnance that has actually
+   * come back is proof the ring it is keeping is too small, so it widens it.
+   *
+   * Storm rocks are excluded by the window below, and deliberately: the
+   * Overseer eating its own bombardment is the ability working as designed, not
+   * a mistake for it to learn from.
+   */
+  private learnFromSelfHarm(): void {
+    const taken = this.self.selfDamageTaken;
+    const fresh = taken - this.selfHarmSeen;
+    this.selfHarmSeen = taken;
+    if (fresh <= 0 || this.deps.arena.time < this.stormSettlesAt) return;
+    if (this.blastClearance >= BLAST_CLEARANCE_MAX) return;
+
+    this.blastClearance = Math.min(BLAST_CLEARANCE_MAX, this.blastClearance + BLAST_LESSON_STEP);
+    if (this.learnedBlast) return;
+    this.learnedBlast = true;
+    this.deps.arena.notify(`${this.self.name} caught its own blast — it will not stand that close again`, 'info');
   }
 
   // ---- abilities --------------------------------------------------------
@@ -557,12 +702,26 @@ export class BossController implements AiController {
     const hiding = accounted.some((t) => !t.visible);
     const wants: BossAbilityDef['id'][] = [];
 
-    if (close.length >= 2 || (close.length === 1 && this.self.healthFraction < 0.5)) wants.push('quake');
+    // Quake is what it has instead of a gun at knife range. Holding fire because
+    // a raider is inside its own blast is precisely the moment to spend it —
+    // otherwise "get inside the Overseer's minimum range" would be free, and the
+    // discipline the gun just gained would be a discount for the raid.
+    if (
+      close.length >= 2 ||
+      (close.length >= 1 && (this.blastLocked || this.self.healthFraction < 0.5))
+    ) {
+      wants.push('quake');
+    }
     // The storm is what it does when shooting is not working: somebody is behind
     // something, or there are simply too many of them to shoot one at a time. It
     // stops needing a reason at all once it is angry.
     if (accounted.length && (hiding || accounted.length >= 2 || phase.index >= 2)) wants.push('meteor');
-    if ((track && !track.visible) || this.densestCluster(raiders) >= 2) wants.push('barrage');
+    // Only worth wanting if there is ground it can safely drop it on: a barrage
+    // is its own ordnance too, and lobbing one onto its own tracks is the same
+    // mistake as shooting the wall behind it, with six shells in it.
+    if (((track && !track.visible) || this.densestCluster(raiders) >= 2) && this.barrageAim()) {
+      wants.push('barrage');
+    }
     if (
       phase.index >= 2 &&
       track &&
@@ -686,9 +845,16 @@ export class BossController implements AiController {
     }
   }
 
-  /** Centre of the densest knot of raiders, or the last place it saw its target. */
+  /**
+   * Centre of the densest knot of raiders, or the last place it saw its target
+   * — as long as that ground is far enough away to shell. The standoff counts
+   * the shells' own scatter, so a barrage walking six metres wide still lands
+   * outside its own blast.
+   */
   private barrageAim(): CANNON.Vec3 | null {
-    const raiders = this.visibleRaiders();
+    const here = this.self.position;
+    const standoff = BARRAGE_SPLASH_RADIUS * this.blastClearance + BARRAGE_SPREAD;
+    const raiders = this.visibleRaiders().filter((t) => t.position.distanceTo(here) > standoff);
     let best: Tank | null = null;
     let bestCount = 0;
     for (const a of raiders) {
@@ -701,7 +867,8 @@ export class BossController implements AiController {
     }
     if (best) return best.position.clone();
     const track = this.currentTrack();
-    return track ? track.lastKnown.clone() : null;
+    if (track && track.lastKnown.distanceTo(here) > standoff) return track.lastKnown.clone();
+    return null;
   }
 
   private updateBarrage(dt: number): void {
@@ -739,7 +906,9 @@ export class BossController implements AiController {
       damage: BARRAGE_DAMAGE,
       weakDamage: BARRAGE_DAMAGE,
       impactForce: 2.4,
-      selfDamage: false,
+      // Its own ordnance, like everything else it throws. The standoff in
+      // `barrageAim` is what keeps that theoretical.
+      selfDamage: true,
       colour: 0xff8844,
       radius: 0.5,
       gravity: BARRAGE_GRAVITY,
@@ -801,6 +970,10 @@ export class BossController implements AiController {
     const delta = impact.vsub(from);
     const flight = delta.length() / METEOR_SPEED;
 
+    // The storm is the one thing it is *meant* to take on the chin, so the
+    // blast lesson is muted for as long as this rock could still be falling.
+    this.stormSettlesAt = Math.max(this.stormSettlesAt, arena.time + flight + 0.6);
+
     arena.fx.incoming(impact, 0xff5a1f, METEOR_SPLASH_RADIUS, flight);
     arena.spawnProjectile({
       owner: this.self,
@@ -838,9 +1011,11 @@ export class BossController implements AiController {
   /**
    * Where the next rock goes: somebody it can account for, the one it is
    * hunting counted twice. Nothing here checks whether the boss is standing in
-   * the blast — deliberately. A raid that fights it inside its own storm is
-   * trading its hulls for the Overseer's health bar, and that trade is the
-   * ability.
+   * the blast — deliberately, and it is the one place that is true. The gun
+   * will not fire a shell that can reach the Overseer; the storm is called down
+   * on coordinates whether it is standing in them or not. A raid that fights it
+   * inside its own storm is trading its hulls for the Overseer's health bar,
+   * and that trade is the ability.
    */
   private meteorAim(): CANNON.Vec3 {
     const pool: CANNON.Vec3[] = [];
@@ -1037,6 +1212,10 @@ export class BossController implements AiController {
     // managing range, stops looking for a wall to put its back against, and
     // simply drives at whoever it wants. At Wrath speed that is not a worse
     // position for it, it is the shortest line to a ram.
+    //
+    // The gun goes quiet as it arrives, because the blast guard is still on: a
+    // charging Overseer trades its shells for its hull and its Quake, which is
+    // the fight it wanted anyway.
     if (this.deps.arena.time < this.chargeUntil || this.deps.phase().enraged) {
       this.setGoal(track.lastKnown.clone());
       return;
@@ -1058,7 +1237,10 @@ export class BossController implements AiController {
     const nav = this.deps.nav;
     const primary = track.visible ? track.tank.centre() : track.lastKnown;
     const [near, far] = preferredRange(this.self.turretDef);
-    const band = near + (far - near) * 0.4;
+    // Its own blast is a floor under the band as well as a gate on the trigger:
+    // ground it cannot shoot from is not ground worth driving to.
+    const safe = this.safeBlastDistance();
+    const band = Math.max(near + (far - near) * 0.4, safe * 1.3);
     const here = this.self.position;
     const raiders = this.visibleRaiders();
 
@@ -1077,6 +1259,9 @@ export class BossController implements AiController {
       score += this.rearCovered(eye, primary) ? 30 : 0;
       score -= this.envelopment(cell, raiders) * 26;
       score -= cell.distanceTo(here) * 0.55;
+      // Standing inside its own blast radius of a raider is standing somewhere
+      // its gun is switched off, however good the cover behind it looks.
+      if (safe > 0 && raiders.some((t) => t.position.distanceTo(cell) < safe)) score -= 90;
       if (score > bestScore) {
         bestScore = score;
         best = cell;
