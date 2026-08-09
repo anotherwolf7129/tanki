@@ -45,6 +45,15 @@ export const SUPPLIES: Record<SupplyKind, SupplyDef> = {
 
 export const SUPPLY_ORDER: SupplyKind[] = ['repair', 'armor', 'damage', 'nitro', 'mine'];
 
+/**
+ * What the player starts a battle with, per kind. A real field stock rather
+ * than a token three: with a 40-second buff and a 20-second self-cooldown, a
+ * fifteen-minute battle has room for far more kit than three of each, and
+ * running dry ten minutes early only made the last third of a battle quieter.
+ * Smart Cooldowns, not scarcity, are what stop supplies being spammed.
+ */
+export const PLAYER_SUPPLY_STOCK = 15;
+
 /** Smart Cooldowns: using one supply briefly locks the others, not itself. */
 export const CROSS_COOLDOWN = 10;
 export const SELF_COOLDOWN = 20;

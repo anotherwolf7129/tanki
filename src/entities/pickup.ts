@@ -306,6 +306,8 @@ interface Mine {
   mesh: THREE.Mesh;
   armTimer: number;
   life: number;
+  /** Multiplier on the blast, from the layer's drone. 1 is a stock Mine. */
+  power: number;
 }
 
 /** Proximity mines. They vanish when their owner is destroyed. */
@@ -315,7 +317,7 @@ export class MineSystem {
 
   constructor(private readonly scene: THREE.Scene) {}
 
-  spawn(owner: Tank, pos: CANNON.Vec3): void {
+  spawn(owner: Tank, pos: CANNON.Vec3, power = 1): void {
     const def = SUPPLIES.mine;
     const material = new THREE.MeshStandardMaterial({
       color: def.colour,
@@ -327,7 +329,7 @@ export class MineSystem {
     const mesh = new THREE.Mesh(this.geo, material);
     mesh.position.set(pos.x, pos.y - 0.4, pos.z);
     this.scene.add(mesh);
-    this.mines.push({ owner, pos: pos.clone(), mesh, armTimer: def.armTime ?? 1.5, life: 240 });
+    this.mines.push({ owner, pos: pos.clone(), mesh, armTimer: def.armTime ?? 1.5, life: 240, power });
   }
 
   update(dt: number, arena: Arena): void {
@@ -355,7 +357,8 @@ export class MineSystem {
       if (!trigger) continue;
 
       const def = SUPPLIES.mine;
-      arena.splash(m.pos, def.radius ?? 8, def.damage ?? 1800, (def.damage ?? 1800) * 0.4, m.owner, {
+      const damage = (def.damage ?? 1800) * m.power;
+      arena.splash(m.pos, def.radius ?? 8, damage, damage * 0.4, m.owner, {
         selfDamage: false,
         impactForce: 2.0,
       });

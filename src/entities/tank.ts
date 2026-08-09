@@ -1,6 +1,6 @@
 import * as CANNON from 'cannon-es';
 import * as THREE from 'three';
-import type { HullDef, SupplyKind, TeamId, TurretDef } from '../data/schema';
+import type { HullDef, StatusKind, SupplyKind, TeamId, TurretDef } from '../data/schema';
 import {
   applyHullAugment,
   applyTurretAugment,
@@ -8,6 +8,7 @@ import {
   type AugmentDef,
   type AugmentTraits,
 } from '../data/augments';
+import type { DroneDef } from '../data/drones';
 import { CROSS_COOLDOWN, SELF_COOLDOWN, SUPPLIES, SUPPLY_ORDER, crossCooldownApplies } from '../data/supplies';
 import { barrelReach, pitchLimits } from '../data';
 import { angleDelta, clamp, DEG } from '../core/mathx';
@@ -22,6 +23,18 @@ import type { AiController } from '../ai/controller';
 const TMP_FWD = new CANNON.Vec3();
 const TMP_SMOKE = new CANNON.Vec3();
 
+/**
+ * The timed buff each supply grants, for the supplies that grant one. Repair
+ * and Mine are absent because neither leaves anything running that a second
+ * supply could contend with — which is also what a drone's "one at a time"
+ * restriction arbitrates over.
+ */
+const BUFF_STATUS: Partial<Record<SupplyKind, StatusKind>> = {
+  armor: 'doubleArmor',
+  damage: 'doubleDamage',
+  nitro: 'nitro',
+};
+
 export interface TankConfig {
   id: number;
   name: string;
@@ -35,6 +48,8 @@ export interface TankConfig {
   /** Fitted modifications, chosen in the garage or by the bot's persona. */
   hullAugment?: AugmentDef | null;
   turretAugment?: AugmentDef | null;
+  /** Fitted drone, which modifies supplies rather than the hull or turret. */
+  drone?: DroneDef | null;
   hullMultiplier: number;
   turretMultiplier: number;
   spawnProtection: number;
@@ -62,6 +77,8 @@ export class Tank {
   readonly turretDef: TurretDef;
   readonly hullAugment: AugmentDef | null;
   readonly turretAugment: AugmentDef | null;
+  /** Fitted drone, or null. Read only by `applySupply`. */
+  readonly drone: DroneDef | null;
   /**
    * The behavioural half of both fitted augments, merged once. The numeric half
    * is already inside `hull` and `turretDef`, which is why nothing downstream
@@ -148,6 +165,7 @@ export class Tank {
     // brought rather than the table it came out of.
     this.hullAugment = cfg.hullAugment ?? null;
     this.turretAugment = cfg.turretAugment ?? null;
+    this.drone = cfg.drone ?? null;
     this.traits = mergeTraits(this.turretAugment, this.hullAugment);
     this.hull = applyHullAugment(scaleHull(cfg.hull, cfg.hullMultiplier), this.hullAugment);
     this.turretDef = applyTurretAugment(scaleTurret(cfg.turret, cfg.turretMultiplier), this.turretAugment);
@@ -373,25 +391,39 @@ export class Tank {
     // buffs run longer. The box itself is unchanged, so a stronger kit never
     // shows up on a tank that did not bring the augment for it.
     const potency = this.traits.supplyPotency ?? 1;
+    // The drone's half of that trade works on strength rather than duration:
+    // the kit lands `amplify` times over, so a supply that already doubles
+    // something doubles it again. Buffs carry it as their status magnitude, and
+    // the flat effects — the heal, the mine — scale by it directly.
+    const amplify = this.drone?.supplyAmplify ?? 1;
+    const buff = BUFF_STATUS[kind];
+    // A drone with one charge can only run one buff. Starting another ends the
+    // one already going rather than being refused: the supply you just spent
+    // always does something.
+    if (buff && this.drone?.exclusiveBuffs) {
+      for (const other of Object.values(BUFF_STATUS)) {
+        if (other !== buff) this.status.remove(other);
+      }
+    }
     switch (kind) {
       case 'repair':
-        arena.heal(this, (def.instantHeal ?? 0) * potency, this);
-        this.healOverTime = ((def.healOverTime ?? 0) * potency) / (def.healDuration ?? 1);
+        arena.heal(this, (def.instantHeal ?? 0) * potency * amplify, this);
+        this.healOverTime = ((def.healOverTime ?? 0) * potency * amplify) / (def.healDuration ?? 1);
         this.healRemaining = def.healDuration ?? 0;
         this.status.remove('burning');
         this.status.remove('freezing');
         break;
       case 'armor':
-        this.status.apply('doubleArmor', 1, (def.duration ?? 40) * potency, this.id);
+        this.status.apply('doubleArmor', amplify, (def.duration ?? 40) * potency, this.id);
         break;
       case 'damage':
-        this.status.apply('doubleDamage', 1, (def.duration ?? 40) * potency, this.id);
+        this.status.apply('doubleDamage', amplify, (def.duration ?? 40) * potency, this.id);
         break;
       case 'nitro':
-        this.status.apply('nitro', 1, (def.duration ?? 40) * potency, this.id);
+        this.status.apply('nitro', amplify, (def.duration ?? 40) * potency, this.id);
         break;
       case 'mine':
-        arena.spawnMine(this, this.position.clone());
+        arena.spawnMine(this, this.position.clone(), amplify);
         break;
     }
     arena.fx.supplyBurst(this.position, def.colour);

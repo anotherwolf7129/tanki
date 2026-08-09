@@ -23,6 +23,10 @@ const HOSTILE: ReadonlySet<StatusKind> = new Set<StatusKind>([
   'reveal',
 ]);
 
+/** Speed and turret-traverse multipliers one Speed Boost is worth. */
+const NITRO_SPEED = 1.4;
+const NITRO_TURRET = 1.25;
+
 export class StatusSet {
   private readonly effects = new Map<StatusKind, StatusInstance>();
   immune = false;
@@ -101,7 +105,13 @@ export class StatusSet {
   /** Multiplier on hull speed and turn rate. */
   get movementScale(): number {
     let s = 1 - this.magnitude('freezing');
-    if (this.has('nitro')) s *= 1.4;
+    // The three supply buffs carry their strength in `magnitude`: how many
+    // times over the effect is applied. A plain Speed Boost is 1, a drone that
+    // doubles it is 2, and the multiplier compounds rather than being special
+    // cased per source — which is what lets one number describe "double the
+    // double" for speed, damage and armour alike.
+    const nitro = this.get('nitro');
+    if (nitro) s *= NITRO_SPEED ** nitro.magnitude;
     if (this.has('stun')) s = 0;
     return Math.max(0, s);
   }
@@ -109,7 +119,8 @@ export class StatusSet {
   /** Multiplier on turret rotation speed. */
   get turretScale(): number {
     let s = 1 - this.magnitude('freezing') * 0.8;
-    if (this.has('nitro')) s *= 1.25;
+    const nitro = this.get('nitro');
+    if (nitro) s *= NITRO_TURRET ** nitro.magnitude;
     if (this.has('stun')) s = 0;
     return Math.max(0, s);
   }
@@ -120,7 +131,8 @@ export class StatusSet {
 
   get damageDealtScale(): number {
     let s = 1;
-    if (this.has('doubleDamage')) s *= 2;
+    const dd = this.get('doubleDamage');
+    if (dd) s *= 2 ** dd.magnitude;
     if (this.has('supercharge')) s *= 1.15;
     return s;
   }
@@ -132,7 +144,8 @@ export class StatusSet {
 
   get damageTakenScale(): number {
     let s = 1;
-    if (this.has('doubleArmor')) s *= 0.5;
+    const armor = this.get('doubleArmor');
+    if (armor) s *= 0.5 ** armor.magnitude;
     if (this.has('ap')) s *= 1.35;
     return s;
   }

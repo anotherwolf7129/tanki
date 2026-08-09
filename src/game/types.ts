@@ -87,7 +87,8 @@ export interface Arena {
   ): void;
 
   spawnProjectile(spec: ProjectileSpawn): void;
-  spawnMine(owner: Tank, position: CANNON.Vec3): void;
+  /** `power` scales the blast, for a drone that amplifies the kit that laid it. */
+  spawnMine(owner: Tank, position: CANNON.Vec3, power?: number): void;
   awardBattlePoints(tank: Tank, points: number): void;
   notify(text: string, kind?: Notification['kind']): void;
 

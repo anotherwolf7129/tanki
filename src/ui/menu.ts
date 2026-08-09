@@ -8,6 +8,7 @@ import {
   type AugmentSlot,
 } from '../data/augments';
 import { DIFFICULTIES, DIFFICULTY_IDS } from '../data/difficulty';
+import { DRONES, DRONE_IDS, droneFor } from '../data/drones';
 import { MAPS, MAP_IDS, mapsForMode } from '../data/maps';
 import {
   DEFAULT_SETTINGS,
@@ -30,6 +31,7 @@ import {
   bossSpeedScale,
 } from '../data/raid';
 import type { ModeCode } from '../data/schema';
+import { PLAYER_SUPPLY_STOCK } from '../data/supplies';
 import type { PlayerLoadout } from '../game/battle';
 
 export interface MenuResult {
@@ -47,7 +49,7 @@ interface Persisted {
 function load(): Persisted {
   const fallback: Persisted = {
     settings: { ...DEFAULT_SETTINGS },
-    loadout: { hull: 'hunter', turret: 'smoky', name: 'Commander', augments: {} },
+    loadout: { hull: 'hunter', turret: 'smoky', name: 'Commander', augments: {}, drone: null },
   };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -120,6 +122,7 @@ export class Menu {
     const augments = (loadout.augments ??= {});
     const hullAug = augmentFor('hull', loadout.hull, augments[loadout.hull]);
     const turretAug = augmentFor('turret', loadout.turret, augments[loadout.turret]);
+    const drone = droneFor(loadout.drone);
     const hull = applyHullAugment(HULLS[loadout.hull], hullAug);
     const turret = applyTurretAugment(TURRETS[loadout.turret], turretAug);
     const [near, far] = preferredRange(turret);
@@ -211,6 +214,21 @@ export class Menu {
             </div>
 
             ${augmentField('turretAug', 'turret', loadout.turret, turretAug)}
+
+            <label>Drone
+              <select id="drone">
+                <option value="" ${drone ? '' : 'selected'}>None — no escort</option>
+                ${DRONE_IDS.map(
+                  (id) =>
+                    `<option value="${id}" ${id === drone?.id ? 'selected' : ''}>${DRONES[id].displayName}</option>`,
+                ).join('')}
+              </select>
+            </label>
+            <p class="hint">${
+              drone
+                ? escapeHtml(drone.blurb)
+                : `You carry <b>${PLAYER_SUPPLY_STOCK}</b> of every supply and can run as many buffs at once as the cooldowns allow. A drone trades that breadth for strength.`
+            }</p>
           </section>
 
           <section class="card">
@@ -307,6 +325,7 @@ export class Menu {
                 <li>Bot aim error ${profile.bot.aimErrorDeg}° → floor ${profile.bot.minAimErrorDeg}°</li>
                 <li>Bot field of view ${profile.bot.fovDegrees}°</li>
                 <li>Overdrive charge ×${profile.player.overdriveChargeRate} vs ×${profile.bot.overdriveChargeRate}</li>
+                <li>Supplies ${PLAYER_SUPPLY_STOCK} of each at spawn vs a bot's one or two</li>
                 <li>Augments: yours always${profile.bot.augments ? ' · bots fit them too' : ' · bots fight stock'}</li>
                 <li>Aim assist ${Math.round(profile.player.aimAssistStrength * 100)}%${profile.dynamic.enabled ? ' · adaptive' : ''}</li>
               </ul>
@@ -372,6 +391,11 @@ export class Menu {
         this.persistAndRender();
       });
     }
+    q<HTMLSelectElement>('#drone').addEventListener('change', (e) => {
+      const value = (e.target as HTMLSelectElement).value;
+      loadout.drone = value || null;
+      this.persistAndRender();
+    });
     q<HTMLSelectElement>('#mode').addEventListener('change', (e) => {
       settings.mode = (e.target as HTMLSelectElement).value as ModeCode;
       this.persistAndRender();
