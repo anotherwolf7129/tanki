@@ -1,4 +1,12 @@
 import { HULLS, HULL_IDS, TURRETS, TURRET_IDS, preferredRange } from '../data';
+import {
+  applyHullAugment,
+  applyTurretAugment,
+  augmentFor,
+  augmentsFor,
+  type AugmentDef,
+  type AugmentSlot,
+} from '../data/augments';
 import { DIFFICULTIES, DIFFICULTY_IDS } from '../data/difficulty';
 import { MAPS, MAP_IDS, mapsForMode } from '../data/maps';
 import {
@@ -39,7 +47,7 @@ interface Persisted {
 function load(): Persisted {
   const fallback: Persisted = {
     settings: { ...DEFAULT_SETTINGS },
-    loadout: { hull: 'hunter', turret: 'smoky', name: 'Commander' },
+    loadout: { hull: 'hunter', turret: 'smoky', name: 'Commander', augments: {} },
   };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -54,7 +62,10 @@ function load(): Persisted {
         // back with a win condition for every mode in the list.
         limits: { ...fallback.settings.limits, ...(parsed.settings?.limits ?? {}) },
       },
-      loadout: { ...fallback.loadout, ...parsed.loadout },
+      // Augments are keyed per item, so an old save that predates them — or one
+      // written before an item had any — merges in as "nothing fitted" rather
+      // than blowing the whole garage away.
+      loadout: { ...fallback.loadout, ...parsed.loadout, augments: { ...(parsed.loadout?.augments ?? {}) } },
     };
   } catch {
     return fallback;
@@ -103,8 +114,14 @@ export class Menu {
   private render(): void {
     const { settings, loadout } = this.state;
     const profile = DIFFICULTIES[settings.difficulty] ?? DIFFICULTIES.standard;
-    const hull = HULLS[loadout.hull];
-    const turret = TURRETS[loadout.turret];
+    // Cards quote the item *as fitted*: an augment that changes a number the
+    // garage shows has to change it here too, or the player is choosing between
+    // a stat block and a blurb that disagree.
+    const augments = (loadout.augments ??= {});
+    const hullAug = augmentFor('hull', loadout.hull, augments[loadout.hull]);
+    const turretAug = augmentFor('turret', loadout.turret, augments[loadout.turret]);
+    const hull = applyHullAugment(HULLS[loadout.hull], hullAug);
+    const turret = applyTurretAugment(TURRETS[loadout.turret], turretAug);
     const [near, far] = preferredRange(turret);
     // Gauss only splashes on its super shot, which is still a reason to show
     // the blast radius on the card — it is why you hold the trigger.
@@ -160,6 +177,8 @@ export class Menu {
             </div>
             <p class="hint"><b>${hull.overdrive.displayName}</b> — ${overdriveBlurb(hull.overdrive.effect)}</p>
 
+            ${augmentField('hullAug', 'hull', loadout.hull, hullAug)}
+
             <label>Turret
               <select id="turret" ${hull.fixedTurret ? 'disabled' : ''}>
                 ${TURRET_IDS.filter(
@@ -180,9 +199,11 @@ export class Menu {
               <span><b>${turret.reloadTime.toFixed(2)}</b>s reload</span>
               <span><b>${turret.rotationSpeed}</b> °/s</span>
               <span><b>${Math.round(near)}–${Math.round(far)}</b> m band</span>
-              ${blast ? `<span><b>${blast.radius}</b> m blast</span>` : ''}
+              ${blast ? `<span><b>${blast.radius.toFixed(1)}</b> m blast</span>` : ''}
               ${(turret.special ?? []).map((s) => `<span class="tag">${s}</span>`).join('')}
             </div>
+
+            ${augmentField('turretAug', 'turret', loadout.turret, turretAug)}
           </section>
 
           <section class="card">
@@ -279,6 +300,7 @@ export class Menu {
                 <li>Bot aim error ${profile.bot.aimErrorDeg}° → floor ${profile.bot.minAimErrorDeg}°</li>
                 <li>Bot field of view ${profile.bot.fovDegrees}°</li>
                 <li>Overdrive charge ×${profile.player.overdriveChargeRate} vs ×${profile.bot.overdriveChargeRate}</li>
+                <li>Augments: yours always${profile.bot.augments ? ' · bots fit them too' : ' · bots fight stock'}</li>
                 <li>Aim assist ${Math.round(profile.player.aimAssistStrength * 100)}%${profile.dynamic.enabled ? ' · adaptive' : ''}</li>
               </ul>
             </div>
@@ -329,6 +351,20 @@ export class Menu {
       loadout.turret = (e.target as HTMLSelectElement).value;
       this.persistAndRender();
     });
+    // Both augment slots may be absent — an item with no augments authored for
+    // it renders no field at all.
+    for (const [sel, item] of [
+      ['#hullAug', loadout.hull],
+      ['#turretAug', loadout.turret],
+    ] as const) {
+      this.root.querySelector<HTMLSelectElement>(sel)?.addEventListener('change', (e) => {
+        const value = (e.target as HTMLSelectElement).value;
+        const fitted = (loadout.augments ??= {});
+        if (value) fitted[item] = value;
+        else delete fitted[item];
+        this.persistAndRender();
+      });
+    }
     q<HTMLSelectElement>('#mode').addEventListener('change', (e) => {
       settings.mode = (e.target as HTMLSelectElement).value as ModeCode;
       this.persistAndRender();
@@ -378,7 +414,7 @@ export class Menu {
       // reach back into the one already running.
       this.onStart?.({
         settings: { ...settings, limits: { ...settings.limits } },
-        loadout: { ...loadout },
+        loadout: { ...loadout, augments: { ...loadout.augments } },
       });
     });
   }
@@ -387,6 +423,34 @@ export class Menu {
     save(this.state);
     this.render();
   }
+}
+
+/**
+ * One augment slot: the choice, and what the choice does. The description sits
+ * under the select rather than in the option text because every one of these is
+ * a trade, and a trade you cannot read is a trade you make by accident.
+ */
+function augmentField(
+  elementId: string,
+  slot: AugmentSlot,
+  item: string,
+  current: AugmentDef | null,
+): string {
+  const options = augmentsFor(slot, item);
+  if (!options.length) return '';
+  return `
+            <label>${slot === 'hull' ? 'Hull' : 'Turret'} augment
+              <select id="${elementId}">
+                <option value="" ${current ? '' : 'selected'}>None — stock ${slot}</option>
+                ${options
+                  .map(
+                    (a) =>
+                      `<option value="${a.id}" ${a.id === current?.id ? 'selected' : ''}>${a.displayName}</option>`,
+                  )
+                  .join('')}
+              </select>
+            </label>
+            <p class="hint">${current ? escapeHtml(current.blurb) : 'No modification fitted. One augment per hull and per turret; the choice is remembered for each.'}</p>`;
 }
 
 function limitLabel(value: number, spec: LimitSpec): string {

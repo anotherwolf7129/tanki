@@ -101,14 +101,57 @@ multipliers as a direct hit, so Double Damage lifts the whole shell rather than 
 Magnum, Striker, Cataclysm and the Gauss super shot are the turrets that carry one; the garage card
 shows the radius.
 
+**Augments** — one optional modification per turret and per hull, three to choose from for every
+item in the game, fitted in the garage and remembered per item (see below).
+
 **Seven maps** assembled from a 5 m prop kit: Sandbox, Silence, Kungur, Rio, Polygon, Stadium and
 low-gravity Madness. Geometry is original primitives, not ripped assets.
 
 **The AI**, which is where the real design work lives — see below.
 
-Not implemented: the Rugby / Siege / Assault modes, modules, drones, augments, the
+Not implemented: the Rugby / Siege / Assault modes, modules, drones, the
 crystal economy and purchasing, and audio. The modification tier system is collapsed to a single
 tier per item plus a flat multiplier, which the difficulty profile uses as the equipment gap.
+
+## Augments
+
+Every turret and every hull has three augments (`src/data/augments.ts`), and you fit one of each in
+the garage. The choice is stored per item, so swapping hulls does not throw away what you had picked
+for the one you are coming back to, and the garage card quotes the item *as fitted* — an augment that
+changes a number you can see changes it on the card too.
+
+None of them is a straight upgrade. Every augment that adds somewhere takes somewhere else, or costs
+you the other two:
+
+- **Vulcan · Ignition** — the headline. Vulcan already punishes you for holding the trigger; Ignition
+  makes that worth doing. Once the barrel is genuinely overheated every round sets the target alight,
+  and the burn is heavy enough and long enough to finish a tank on its own if you keep firing. It
+  also raises the heat ceiling so the gun keeps working deeper into the red — which is the whole
+  trade, because everything above 1.0 is cooking you as well. Titan's **Thermal Sink** is the hull
+  that can afford it.
+- **Shaft · Mobile Scope** — you can drive while scoped, and the charge builds slower for it. The
+  augment that changes how a turret is played rather than what its numbers say.
+- **Isida · Vampirism** — a third of the damage you do comes back as health.
+- **Thunder · Concussion** — the overpressure regularly leaves the target unable to shoot back.
+- **Mammoth · Spall Liner** — attackers eat a slice of whatever they deal you.
+- **Hunter · Field Repair**, **Ares · Regenerative Plating** — repair themselves once nothing has hit
+  them for a few seconds.
+- **Hunter · Ram Plate**, **Mammoth · Charger** — driving into someone at speed becomes a real attack.
+
+Mechanically an augment is either *numbers* or *behaviour*, never both smeared across the codebase.
+Numbers are folded into a copy of the item's definition before the battle starts, so the whole
+simulation reads them for free — a turret whose range an augment extended simply has a longer range,
+and the bots' engagement bands move with it without knowing augments exist. Behaviour is a small set
+of named traits resolved at the bottom of the damage funnel, which is why a burn rides on whatever
+put the damage through — shell, blast or beam tick — rather than on the one firing mode somebody
+remembered to wire.
+
+**Bots fit them too.** Each persona names the augments that match how it fights — a Bruiser wants its
+Vulcan setting people on fire — and a minority of bots roll something else instead, so a persona
+reads as a build the enemy usually runs rather than as a fixed serial number. Whether bots get
+augments at all is part of the equipment gap: on Recruit they fight stock and the garage says so.
+The Overseer's fittings are authored rather than rolled, because the raid is balanced against that
+exact boss.
 
 ## Boss Raid
 
@@ -369,7 +412,7 @@ src/
   core/      loop helpers, input, math
   physics/   cannon-es world, collision layers, vehicle controller
   entities/  tank, weapon, projectile, pickup, status
-  data/      turrets.json, hulls.json, maps/, supplies, modes, difficulty, raid
+  data/      turrets.json, hulls.json, augments, maps/, supplies, modes, difficulty, raid
   ai/        navgrid, perception, behaviour tree, personas, team board, boss, squad channel
   render/    scene, procedural textures, materials, tank meshes, effects, camera, HUD
   modes/     dm, tdm, ctf, cp, boss raid
@@ -378,6 +421,7 @@ src/
 tools/
   validate-maps.mjs
   raid-smoke.mjs
+  augment-smoke.mjs
 ```
 
 ## Map validation
@@ -417,6 +461,22 @@ and so out-healed the entire squad, squadmates whose guns could not reach the ra
 a rescue threshold nobody ever reached, structural integrity so high that four hundred simulated
 seconds brought down between zero and two buildings, and a squad radio that was saying something
 every six seconds — most of it announcing deaths the kill feed had already printed.
+
+## Augment harness
+
+Augments reach into every other system — they rewrite turret and hull definitions before the
+simulation sees them, and a bad multiplier does not throw. It produces a clip of zero shells, a NaN
+reload or a cone with no angle, and the battle quietly stops making sense somewhere downstream.
+
+```bash
+npm run augment-smoke              # every augment, 1 s of battle each
+node tools/augment-smoke.mjs 3     # 3 s each
+```
+
+fits every augment in the table to a real battle in turn, holds the trigger down, and reports
+anything that comes back non-finite, non-positive or missing. It also pins the two things about
+Ignition worth a regression test rather than a play test: that it does nothing at all until the
+barrel is overheated, and that once it is, the burn alone takes a serious bite out of a tank.
 
 ## Balance figures
 

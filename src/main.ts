@@ -4,6 +4,7 @@ import { Battle, type PlayerLoadout } from './game/battle';
 import { Hud } from './render/hud';
 import { Menu, type MenuResult } from './ui/menu';
 import { validateMaps } from './data/maps/validate';
+import { AUGMENTS } from './data/augments';
 import type { BattleSettings } from './data/modes';
 import './style.css';
 
@@ -117,12 +118,15 @@ declare global {
       battle: () => Battle | null;
       restart: (settings?: Partial<BattleSettings>, loadout?: Partial<PlayerLoadout>) => void;
       validateMaps: typeof validateMaps;
+      /** The augment table, for the harness that sweeps every one of them. */
+      augments: typeof AUGMENTS;
     };
   }
 }
 window.tankArena = {
   battle: () => battle,
   validateMaps,
+  augments: AUGMENTS,
   restart(settings, loadout) {
     if (!battle) return;
     startBattle({
@@ -131,6 +135,10 @@ window.tankArena = {
         hull: battle.player.hull.id,
         turret: battle.player.turretDef.id,
         name: battle.player.name,
+        augments: {
+          ...(battle.player.hullAugment ? { [battle.player.hull.id]: battle.player.hullAugment.id } : {}),
+          ...(battle.player.turretAugment ? { [battle.player.turretDef.id]: battle.player.turretAugment.id } : {}),
+        },
         ...loadout,
       },
     });

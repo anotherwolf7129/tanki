@@ -1,6 +1,7 @@
 import * as CANNON from 'cannon-es';
 import * as THREE from 'three';
 import { hull as hullDef, turret as turretDef } from '../data';
+import { augmentFor, randomAugmentFor, type AugmentDef } from '../data/augments';
 import { DIFFICULTIES, DynamicDifficulty, LAST_HIT_COOLDOWN, LAST_HIT_FLOOR, type DifficultyProfile } from '../data/difficulty';
 import { map as mapDef } from '../data/maps';
 import type { BattleSettings } from '../data/modes';
@@ -10,9 +11,11 @@ import {
   BOSS_ARMOR_KITS,
   BOSS_DAMAGE_KITS,
   BOSS_HULL,
+  BOSS_HULL_AUGMENT,
   BOSS_NAME,
   BOSS_REPAIR_KITS,
   BOSS_TURRET,
+  BOSS_TURRET_AUGMENT,
   bossHealth,
   phaseFor,
 } from '../data/raid';
@@ -39,15 +42,24 @@ import { DeathmatchMode } from '../modes/deathmatch';
 import { TeamDeathmatchMode } from '../modes/teamdeathmatch';
 import type { BossStatus, ModeController } from '../modes/base';
 import { OverdriveSystem } from './overdrive';
-import type { Arena, DamageOptions, Notification, ProjectileSpawn } from './types';
+import type { Arena, DamageKind, DamageOptions, Notification, ProjectileSpawn } from './types';
 
 export interface PlayerLoadout {
   hull: string;
   turret: string;
   name: string;
+  /**
+   * Fitted augment per item, keyed by hull or turret id. Keyed by item rather
+   * than by slot so swapping hulls in the garage does not throw away the
+   * augment you had picked for the one you are coming back to.
+   */
+  augments?: Record<string, string>;
 }
 
 const RESPAWN_TIME = 3;
+
+/** Seconds between one ram-augment shunt and the next. */
+const RAM_COOLDOWN = 1.1;
 
 /** Half-width, in metres, of the corridor auto-aim will lock a target inside. */
 const LOCK_WIDTH = 5.5;
@@ -69,6 +81,20 @@ export interface BattleSnapshot {
   over: boolean;
   winner?: string;
   reason?: string;
+}
+
+/**
+ * Conditional damage from the attacker's turret augment. Every one of these is
+ * a bonus for setting the shot up rather than for taking it, which is why they
+ * are resolved against the target's state at the moment of impact.
+ */
+function augmentStrikeScale(source: Tank, target: Tank): number {
+  const t = source.traits;
+  let scale = 1;
+  if (t.bonusVsBurning && target.status.has('burning')) scale *= 1 + t.bonusVsBurning;
+  if (t.bonusVsFrozen && target.status.has('freezing')) scale *= 1 + t.bonusVsFrozen;
+  if (t.execute && target.healthFraction <= t.execute.below) scale *= 1 + t.execute.bonus;
+  return scale;
 }
 
 export class Battle implements Arena {
@@ -141,6 +167,8 @@ export class Battle implements Arena {
       isPlayer: true,
       hullId: loadout.hull,
       turretId: loadout.turret,
+      hullAugmentId: loadout.augments?.[loadout.hull],
+      turretAugmentId: loadout.augments?.[loadout.turret],
     });
 
     if (this.mode instanceof BossRaidMode) {
@@ -201,6 +229,8 @@ export class Battle implements Arena {
         isPlayer: false,
         hullId: persona.hull,
         turretId: persona.turret,
+        hullAugmentId: this.botAugment('hull', persona.hull, persona.hullAugment),
+        turretAugmentId: this.botAugment('turret', persona.turret, persona.turretAugment),
       });
       bot.ai = new BotController(bot, persona, {
         arena: this,
@@ -232,6 +262,8 @@ export class Battle implements Arena {
         hullMultiplier: ALLY_HULL_MULTIPLIER,
         hullId: persona.hull,
         turretId: persona.turret,
+        hullAugmentId: this.botAugment('hull', persona.hull, persona.hullAugment),
+        turretAugmentId: this.botAugment('turret', persona.turret, persona.turretAugment),
       });
       ally.ai = new BotController(ally, persona, {
         arena: this,
@@ -254,6 +286,12 @@ export class Battle implements Arena {
       isBoss: true,
       hullId: BOSS_HULL,
       turretId: BOSS_TURRET,
+      // The Overseer's fittings are authored rather than rolled: the raid is
+      // balanced against exactly this boss, and a random augment on top of the
+      // raid's health pool is the difference between a hard fight and an
+      // unwinnable one.
+      hullAugmentId: BOSS_HULL_AUGMENT,
+      turretAugmentId: BOSS_TURRET_AUGMENT,
     });
     // The boss sits outside the equipment gap entirely: its pool is authored for
     // the size of the squad, not derived from a tier multiplier.
@@ -299,6 +337,8 @@ export class Battle implements Arena {
     hullMultiplier?: number;
     hullId: string;
     turretId: string;
+    hullAugmentId?: string | null;
+    turretAugmentId?: string | null;
   }): Tank {
     const h = hullDef(spec.hullId);
     const t = turretDef(h.fixedTurret ?? spec.turretId);
@@ -314,6 +354,8 @@ export class Battle implements Arena {
         isBoss: spec.isBoss,
         hull: h,
         turret: t,
+        hullAugment: augmentFor('hull', h.id, spec.hullAugmentId),
+        turretAugment: augmentFor('turret', t.id, spec.turretAugmentId),
         hullMultiplier: spec.isBoss ? 1 : (spec.hullMultiplier ?? p.hullTierMultiplier),
         turretMultiplier: spec.isBoss ? 1 : p.turretTierMultiplier,
         spawnProtection: p.spawnProtection,
@@ -326,6 +368,23 @@ export class Battle implements Arena {
     this.tanks.push(tank);
     this.bodyIndex.set(tank.vehicle.body, tank);
     return tank;
+  }
+
+  /**
+   * What a bot brings fitted. Personas name the augment that matches how they
+   * fight — a Bruiser wants its Vulcan setting people on fire — but a minority
+   * of them roll something else instead, so a persona reads as a build the enemy
+   * usually runs rather than as a fixed serial number.
+   *
+   * Whether bots get augments at all is part of the equipment gap: on Recruit
+   * they fight with the bare item, and the garage says so.
+   */
+  private botAugment(slot: 'hull' | 'turret', item: string, preferred?: string): string | null {
+    if (!this.profile.bot.augments) return null;
+    const signature = augmentFor(slot, item, preferred);
+    const chosen: AugmentDef | null =
+      signature && Math.random() < 0.7 ? signature : (randomAugmentFor(slot, item) ?? signature);
+    return chosen?.id ?? null;
   }
 
   /** Round-robin through the team's spawn list, avoiding occupied points. */
@@ -395,7 +454,12 @@ export class Battle implements Arena {
     if (source && !selfInflicted && this.areAllies(source, target) && !this.settings.friendlyFire) return 0;
 
     let dmg = amount;
-    if (!opts.ignoreArmor) dmg *= target.status.damageTakenScale;
+    if (!opts.ignoreArmor) dmg *= target.status.damageTakenScale * (target.traits.damageTaken ?? 1);
+    // Conditional turret bonuses ride on shots, not on the burn a shot left
+    // behind — otherwise a finisher augment would quietly boost its own fire.
+    if (source && !selfInflicted && (kind === 'direct' || kind === 'splash')) {
+      dmg *= augmentStrikeScale(source, target);
+    }
     dmg *= 1 - target.damageReduction;
     // Mode-specific reshaping — in Boss Raid this is the player's damage edge
     // over the squad, the engine-deck breach bonus, and the boss's siege
@@ -439,8 +503,79 @@ export class Battle implements Arena {
     }
     if (kind !== 'burn') this.fx.impact(at, new CANNON.Vec3(0, 1, 0), opts.critical ? 0xfbbf24 : 0xff5555, 0.6);
 
+    if (source && !selfInflicted) this.resolveAugmentHit(target, source, dmg, kind);
+
     if (target.health <= 0) this.destroy(target, source);
     return dmg;
+  }
+
+  /**
+   * Everything an augment does *because* a hit landed: the effects a gun leaves
+   * behind it, the health a vampiric beam takes back, and the fragments a lined
+   * hull sheds into whoever shot it.
+   *
+   * It lives at the bottom of the damage funnel rather than in each firing mode
+   * so a burn rides on whatever put the damage through — a shell, a blast, a
+   * beam tick — instead of on the one archetype somebody remembered to wire.
+   */
+  private resolveAugmentHit(target: Tank, source: Tank, dmg: number, kind: DamageKind): void {
+    // Only weapons ignite, not burns ticking or the ram they set up.
+    const struck = kind === 'direct' || kind === 'splash';
+    if (!struck || !this.areEnemies(source, target)) return;
+
+    if (target.health > 0) {
+      const t = source.traits;
+      const ignite = t.ignite;
+      // Vulcan's Ignition: nothing at all until the barrel is in the red, and
+      // then a burn heavy enough to finish the job on its own.
+      if (ignite && (!ignite.whenOverheated || source.weapon.overheated)) {
+        target.status.apply('burning', ignite.dps, ignite.duration, source.id);
+        target.status.remove('freezing');
+      }
+      if (t.chill) {
+        target.status.apply('freezing', t.chill.magnitude, t.chill.duration, source.id);
+        target.status.remove('burning');
+      }
+      if (t.disrupt && Math.random() < t.disrupt.chance) {
+        target.status.apply('emp', 1, t.disrupt.duration, source.id);
+      }
+      if (t.lifesteal) this.heal(source, dmg * t.lifesteal, source);
+    }
+
+    // Spall goes back down the line of fire as contact damage, which is what
+    // keeps it from reflecting off itself for ever.
+    const thorns = target.traits.thorns;
+    if (thorns && source.alive) this.damage(source, dmg * thorns, target, { kind: 'contact' });
+  }
+
+  /**
+   * Ram augments. A shunt is a real attack for the hulls built around it, so it
+   * scales with how fast the impact actually was and is rate-limited — otherwise
+   * "touching an enemy" would deal damage sixty times a second.
+   */
+  private updateRamAugments(): void {
+    for (const tank of this.tanks) {
+      const ram = tank.traits.ram;
+      if (!ram || !tank.alive) continue;
+      if (tank.ramCooldown > 0) continue;
+      const speed = Math.hypot(tank.velocity.x, tank.velocity.z);
+      if (speed < ram.minSpeed) continue;
+
+      for (const other of this.tanks) {
+        if (other === tank || !other.alive || !this.areEnemies(tank, other)) continue;
+        const reach = (tank.hull.size[2] + other.hull.size[2]) * 0.6;
+        if (tank.position.distanceTo(other.position) > reach) continue;
+
+        const force = clamp(speed / Math.max(1, tank.hull.topSpeed), 0.4, 1.4);
+        this.damage(other, ram.damage * force, tank, { kind: 'contact' });
+        const push = other.position.vsub(tank.position);
+        push.y = 0.4;
+        push.normalize();
+        other.vehicle.applyImpulse(push, 1.2 * force);
+        tank.ramCooldown = RAM_COOLDOWN;
+        break;
+      }
+    }
   }
 
   /**
@@ -540,6 +675,10 @@ export class Battle implements Arena {
 
     this.mode.onKill(killer ?? null, victim, this);
 
+    if (killer && killer !== victim && killer.traits.overdriveOnKill) {
+      killer.overdriveCharge = Math.min(100, killer.overdriveCharge + killer.traits.overdriveOnKill * 100);
+    }
+
     if (killer && killer !== victim) {
       if (killer.isPlayer) {
         this.dynamic.recordKill();
@@ -593,6 +732,7 @@ export class Battle implements Arena {
     }
 
     this.phys.step(dt);
+    this.updateRamAugments();
     this.projectiles.update(dt, this);
     this.overdrives.update(dt, this);
     for (const r of this.overdrives.activeRampages()) this.mines.clearNear(r.pos, r.radius);
@@ -659,7 +799,7 @@ export class Battle implements Arena {
     p.vehicle.update(dt, {
       forward: input.forward,
       turn: input.turn,
-      speedScale: p.status.movementScale,
+      speedScale: p.movementScale,
       locked: p.weapon.movementLocked,
     });
   }

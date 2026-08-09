@@ -65,6 +65,13 @@ export interface HeatDef {
   fallPerSec: number;
   selfBurnDps: number;
   spinUp: number;
+  /**
+   * Heat at which the gun refuses to fire at all. Above 1 the barrel is
+   * overheating and cooking its own driver, so the gap between 1 and the ceiling
+   * is how long the gun can be held in the red — which is exactly what Vulcan's
+   * Ignition augment buys. Defaults to `DEFAULT_HEAT_CEILING`.
+   */
+  ceiling?: number;
 }
 
 export interface ScopedDef {

@@ -500,15 +500,25 @@ export class Hud {
     const x = 28;
     const y = h - 96;
     const width = 300;
+    // What you fitted in the garage, named on the panel. An augment is a real
+    // change to how the tank plays, and a modification you cannot see is one you
+    // forget you are carrying.
+    const fitted = [p.hullAugment, p.turretAugment].filter((a) => a != null);
+    const top = fitted.length ? y - 42 : y - 26;
 
     ctx.save();
     ctx.fillStyle = PANEL;
-    roundRect(ctx, x - 10, y - 26, width + 20, 76, 8);
+    roundRect(ctx, x - 10, top, width + 20, y + 50 - top, 8);
     ctx.fill();
 
     ctx.fillStyle = '#9aa4b2';
     ctx.font = '600 11px system-ui, sans-serif';
     ctx.textAlign = 'left';
+    if (fitted.length) {
+      ctx.fillStyle = '#818cf8';
+      ctx.fillText(fitted.map((a) => a.displayName.toUpperCase()).join(' · '), x, y - 30);
+      ctx.fillStyle = '#9aa4b2';
+    }
     ctx.fillText(`${p.hull.displayName.toUpperCase()} · ${p.turretDef.displayName.toUpperCase()}`, x, y - 14);
 
     ctx.fillStyle = 'rgba(255,255,255,0.12)';
