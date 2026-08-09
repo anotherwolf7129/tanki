@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "validate-maps": "node tools/validate-maps.mjs",
     "raid-smoke": "node tools/raid-smoke.mjs",
-    "augment-smoke": "node tools/augment-smoke.mjs"
+    "augment-smoke": "node tools/augment-smoke.mjs",
+    "turret-dps": "node tools/turret-dps.mjs"
   },
   "dependencies": {
     "cannon-es": "^0.20.0",

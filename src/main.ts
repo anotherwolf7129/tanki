@@ -5,6 +5,7 @@ import { Hud } from './render/hud';
 import { Menu, type MenuResult } from './ui/menu';
 import { validateMaps } from './data/maps/validate';
 import { AUGMENTS } from './data/augments';
+import { TURRETS } from './data';
 import type { BattleSettings } from './data/modes';
 import './style.css';
 
@@ -120,6 +121,8 @@ declare global {
       validateMaps: typeof validateMaps;
       /** The augment table, for the harness that sweeps every one of them. */
       augments: typeof AUGMENTS;
+      /** The turret table, for the harness that measures what each one does. */
+      turrets: typeof TURRETS;
     };
   }
 }
@@ -127,6 +130,7 @@ window.tankArena = {
   battle: () => battle,
   validateMaps,
   augments: AUGMENTS,
+  turrets: TURRETS,
   restart(settings, loadout) {
     if (!battle) return;
     startBattle({
