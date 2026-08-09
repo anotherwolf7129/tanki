@@ -23,6 +23,15 @@ export const BOSS_TURRET = 'cataclysm';
 export const BOSS_NAME = 'OVERSEER';
 
 /**
+ * What the Overseer has fitted. Authored rather than rolled, because the raid is
+ * balanced against this exact boss: Incendiary is the reason standing in its
+ * blast still costs you after you have driven out of it, and the reactor is why
+ * Purge comes back around inside a single raid.
+ */
+export const BOSS_TURRET_AUGMENT = 'cataclysm.incendiary';
+export const BOSS_HULL_AUGMENT = 'juggernaut.siege_reactor';
+
+/**
  * Health pool. Sized so a full squad needs several sustained minutes rather
  * than one good burst, and so adding a squadmate lengthens the fight instead of
  * trivialising it.

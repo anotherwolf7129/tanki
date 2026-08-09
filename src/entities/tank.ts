@@ -1,6 +1,13 @@
 import * as CANNON from 'cannon-es';
 import * as THREE from 'three';
 import type { HullDef, SupplyKind, TeamId, TurretDef } from '../data/schema';
+import {
+  applyHullAugment,
+  applyTurretAugment,
+  mergeTraits,
+  type AugmentDef,
+  type AugmentTraits,
+} from '../data/augments';
 import { CROSS_COOLDOWN, SELF_COOLDOWN, SUPPLIES, SUPPLY_ORDER, crossCooldownApplies } from '../data/supplies';
 import { barrelReach, pitchLimits } from '../data';
 import { angleDelta, clamp, DEG } from '../core/mathx';
@@ -25,6 +32,9 @@ export interface TankConfig {
   isBoss?: boolean;
   hull: HullDef;
   turret: TurretDef;
+  /** Fitted modifications, chosen in the garage or by the bot's persona. */
+  hullAugment?: AugmentDef | null;
+  turretAugment?: AugmentDef | null;
   hullMultiplier: number;
   turretMultiplier: number;
   spawnProtection: number;
@@ -50,6 +60,14 @@ export class Tank {
   readonly isBoss: boolean;
   readonly hull: HullDef;
   readonly turretDef: TurretDef;
+  readonly hullAugment: AugmentDef | null;
+  readonly turretAugment: AugmentDef | null;
+  /**
+   * The behavioural half of both fitted augments, merged once. The numeric half
+   * is already inside `hull` and `turretDef`, which is why nothing downstream
+   * has to consult the augment table to get the stats right.
+   */
+  readonly traits: AugmentTraits;
 
   readonly vehicle: VehicleController;
   readonly status = new StatusSet();
@@ -109,6 +127,8 @@ export class Tank {
   /** Populated by the Mammoth rampage overdrive. */
   contactDamage = 0;
   damageReduction = 0;
+  /** Cools down the ram augment so a shunt is one hit, not one per frame. */
+  ramCooldown = 0;
 
   constructor(
     cfg: TankConfig,
@@ -123,16 +143,22 @@ export class Tank {
     this.isBoss = cfg.isBoss === true;
 
     // Tier multipliers are the spec's "equipment gap": the player runs top gear,
-    // bots run mid gear, and the difference is legible in the garage UI.
-    this.hull = scaleHull(cfg.hull, cfg.hullMultiplier);
-    this.turretDef = scaleTurret(cfg.turret, cfg.turretMultiplier);
+    // bots run mid gear, and the difference is legible in the garage UI. The
+    // augment is folded in afterwards, so it modifies the gear you actually
+    // brought rather than the table it came out of.
+    this.hullAugment = cfg.hullAugment ?? null;
+    this.turretAugment = cfg.turretAugment ?? null;
+    this.traits = mergeTraits(this.turretAugment, this.hullAugment);
+    this.hull = applyHullAugment(scaleHull(cfg.hull, cfg.hullMultiplier), this.hullAugment);
+    this.turretDef = applyTurretAugment(scaleTurret(cfg.turret, cfg.turretMultiplier), this.turretAugment);
 
     this.maxHealth = this.hull.protection;
     this.health = this.maxHealth;
-    this.spawnProtectionDuration = cfg.spawnProtection;
-    this.spawnProtection = cfg.spawnProtection;
+    this.spawnProtectionDuration = cfg.spawnProtection + (this.traits.spawnProtection ?? 0);
+    this.spawnProtection = this.spawnProtectionDuration;
     this.overdriveChargeRate = cfg.overdriveChargeRate;
     this.status.immune = !!this.hull.statusImmune;
+    this.status.resistance = this.traits.statusResistance ?? 0;
 
     this.vehicle = new VehicleController(phys, this.hull, spawn.pos, spawn.yaw);
     this.turretYaw = spawn.yaw;
@@ -193,6 +219,18 @@ export class Tank {
     return pitchLimits(this.turretDef);
   }
 
+  /**
+   * Everything that scales how fast this hull moves — status effects, and the
+   * adrenaline augment that only shows up once the hull is nearly dead. The
+   * single place drivers should read, player and bot alike.
+   */
+  get movementScale(): number {
+    let s = this.status.movementScale;
+    const a = this.traits.adrenaline;
+    if (a && this.alive && this.healthFraction <= a.below) s *= a.speed;
+    return s;
+  }
+
   /** Effective turret rotation speed after status, scoping and firing modifiers. */
   private turretRotationSpeed(): number {
     let speed = this.turretDef.rotationSpeed * this.status.turretScale;
@@ -230,10 +268,19 @@ export class Tank {
     }
 
     this.spawnProtection = Math.max(0, this.spawnProtection - dt);
+    this.ramCooldown = Math.max(0, this.ramCooldown - dt);
     const { burnDamage, burnSourceId } = this.status.update(dt);
     if (burnDamage > 0) {
       const src = arena.tanks.find((t) => t.id === burnSourceId) ?? null;
-      arena.damage(this, burnDamage, src, { kind: 'burn' });
+      arena.damage(this, burnDamage * (this.traits.burnTaken ?? 1), src, { kind: 'burn' });
+    }
+
+    // Field repair. Deliberately keyed off the last hit rather than off firing:
+    // the augment is for the tank that has broken contact, not for the one
+    // trading shots from behind cover.
+    const regen = this.traits.regen;
+    if (regen && this.health < this.maxHealth && arena.time - this.lastAttackedAt >= regen.delay) {
+      arena.heal(this, regen.perSecond * dt, this);
     }
 
     if (this.healRemaining > 0) {
@@ -322,22 +369,26 @@ export class Tank {
 
   applySupply(kind: SupplyKind, arena: Arena): void {
     const def = SUPPLIES[kind];
+    // Supply-focused hulls get more out of the same box: repairs heal harder,
+    // buffs run longer. The box itself is unchanged, so a stronger kit never
+    // shows up on a tank that did not bring the augment for it.
+    const potency = this.traits.supplyPotency ?? 1;
     switch (kind) {
       case 'repair':
-        arena.heal(this, def.instantHeal ?? 0, this);
-        this.healOverTime = (def.healOverTime ?? 0) / (def.healDuration ?? 1);
+        arena.heal(this, (def.instantHeal ?? 0) * potency, this);
+        this.healOverTime = ((def.healOverTime ?? 0) * potency) / (def.healDuration ?? 1);
         this.healRemaining = def.healDuration ?? 0;
         this.status.remove('burning');
         this.status.remove('freezing');
         break;
       case 'armor':
-        this.status.apply('doubleArmor', 1, def.duration ?? 40, this.id);
+        this.status.apply('doubleArmor', 1, (def.duration ?? 40) * potency, this.id);
         break;
       case 'damage':
-        this.status.apply('doubleDamage', 1, def.duration ?? 40, this.id);
+        this.status.apply('doubleDamage', 1, (def.duration ?? 40) * potency, this.id);
         break;
       case 'nitro':
-        this.status.apply('nitro', 1, def.duration ?? 40, this.id);
+        this.status.apply('nitro', 1, (def.duration ?? 40) * potency, this.id);
         break;
       case 'mine':
         arena.spawnMine(this, this.position.clone());
@@ -360,11 +411,13 @@ export class Tank {
     this.health = this.maxHealth;
     this.status.clear();
     this.status.immune = !!this.hull.statusImmune;
+    this.status.resistance = this.traits.statusResistance ?? 0;
     this.spawnProtection = this.spawnProtectionDuration;
     this.overdriveActive = 0;
     this.healRemaining = 0;
     this.contactDamage = 0;
     this.damageReduction = 0;
+    this.ramCooldown = 0;
     this.carryingFlag = null;
     this.weapon.reset();
     this.vehicle.teleport(spawn.pos, spawn.yaw);

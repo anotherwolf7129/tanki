@@ -12,9 +12,25 @@ export interface StatusInstance {
  * duplicate, except freezing which accumulates up to a cap — that stacking is
  * what makes sustained Freeze contact progressively crippling.
  */
+/** Effects an enemy inflicts on you, as opposed to buffs you give yourself. */
+const HOSTILE: ReadonlySet<StatusKind> = new Set<StatusKind>([
+  'burning',
+  'freezing',
+  'emp',
+  'stun',
+  'ap',
+  'jammer',
+  'reveal',
+]);
+
 export class StatusSet {
   private readonly effects = new Map<StatusKind, StatusInstance>();
   immune = false;
+  /**
+   * 0..1, from a hull augment. Shortens hostile effects only — a coating that
+   * sheds fire is not a reason for your own Double Armour to run out early.
+   */
+  resistance = 0;
 
   clear(): void {
     this.effects.clear();
@@ -22,6 +38,7 @@ export class StatusSet {
 
   apply(kind: StatusKind, magnitude: number, duration: number, sourceId = -1): void {
     if (this.immune && kind !== 'doubleArmor' && kind !== 'doubleDamage' && kind !== 'nitro') return;
+    if (this.resistance > 0 && HOSTILE.has(kind)) duration *= 1 - Math.min(0.9, this.resistance);
     const existing = this.effects.get(kind);
     if (!existing) {
       this.effects.set(kind, { kind, magnitude, remaining: duration, sourceId });

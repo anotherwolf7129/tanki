@@ -1716,7 +1716,7 @@ export class BossController implements AiController {
       // accelerating as the bar empties. Capped so it stays a tank.
       speedScale: Math.min(
         BOSS_SPEED_CAP,
-        this.self.status.movementScale *
+        this.self.movementScale *
           (bossSpeedScale(this.self.healthFraction) + (this.quarry ? MARK_SPEED_BONUS : 0)),
       ),
       locked: this.self.weapon.movementLocked,

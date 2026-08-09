@@ -25,6 +25,12 @@ export interface DifficultyProfile {
     /** Chance per decision tick of re-evaluating the current target. */
     targetSwitchChance: number;
     spawnProtection: number;
+    /**
+     * Whether bots fit augments. Part of the equipment gap rather than a
+     * separate difficulty knob: on Recruit you are the only tank on the field
+     * with a modification, and the garage says so.
+     */
+    augments: boolean;
   };
   player: {
     aimAssistStrength: number;
@@ -56,6 +62,7 @@ export const DIFFICULTIES: Record<string, DifficultyProfile> = {
       overdriveChargeRate: 0.35,
       targetSwitchChance: 0.12,
       spawnProtection: 1,
+      augments: false,
     },
     player: {
       aimAssistStrength: 0.5,
@@ -85,6 +92,7 @@ export const DIFFICULTIES: Record<string, DifficultyProfile> = {
       overdriveChargeRate: 0.5,
       targetSwitchChance: 0.2,
       spawnProtection: 1,
+      augments: true,
     },
     player: {
       aimAssistStrength: 0.35,
@@ -114,6 +122,7 @@ export const DIFFICULTIES: Record<string, DifficultyProfile> = {
       overdriveChargeRate: 0.8,
       targetSwitchChance: 0.3,
       spawnProtection: 2,
+      augments: true,
     },
     player: {
       aimAssistStrength: 0.15,
@@ -143,6 +152,7 @@ export const DIFFICULTIES: Record<string, DifficultyProfile> = {
       overdriveChargeRate: 1.2,
       targetSwitchChance: 0.35,
       spawnProtection: 3,
+      augments: true,
     },
     player: {
       aimAssistStrength: 0,

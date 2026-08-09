@@ -1,5 +1,6 @@
 import * as CANNON from 'cannon-es';
 import type { SplashDef, TurretDef } from '../data/schema';
+import { DEFAULT_HEAT_CEILING } from '../data/augments';
 import { clamp, DEG } from '../core/mathx';
 import { SHOT_MASK } from '../physics/world';
 import type { Arena } from '../game/types';
@@ -126,7 +127,18 @@ export class Weapon {
     return this.def.fuel ? clamp(this.fuel / this.def.fuel.capacity, 0, 1) : 1;
   }
   get heatFraction(): number {
-    return clamp(this.heat, 0, 1.2);
+    return clamp(this.heat, 0, this.heatCeiling);
+  }
+  /** Heat at which this barrel stops firing altogether. */
+  get heatCeiling(): number {
+    return this.def.heat?.ceiling ?? DEFAULT_HEAT_CEILING;
+  }
+  /**
+   * The barrel is in the red: cooking its own driver, and — with Vulcan's
+   * Ignition fitted — setting fire to whatever it hits.
+   */
+  get overheated(): boolean {
+    return this.def.heat != null && this.heat > 1;
   }
   get chargeFraction(): number {
     const time = this.scopedActive ? (this.def.scoped?.chargeTime ?? 1) : (this.def.charge?.time ?? 1);
@@ -257,7 +269,7 @@ export class Weapon {
 
   private tickMinigun(dt: number, arena: Arena, intent: FireIntent): void {
     const h = this.def.heat!;
-    if (intent.fire && this.heat < 1.15) {
+    if (intent.fire && this.heat < this.heatCeiling) {
       this.spin = Math.min(1, this.spin + dt / h.spinUp);
       this.heat += h.risePerSec * dt;
       this.firingRecently = 0.25;

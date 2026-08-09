@@ -385,7 +385,7 @@ export class BotController implements AiController {
 
     if (vehicle.isInverted) vehicle.requestFlip();
 
-    const speedScale = this.self.status.movementScale;
+    const speedScale = this.self.movementScale;
     vehicle.update(dt, {
       forward,
       turn,

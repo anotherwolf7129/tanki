@@ -5,6 +5,14 @@ export interface Persona {
   displayName: string;
   hull: string;
   turret: string;
+  /**
+   * The augments this persona fits, when the difficulty lets bots have them.
+   * Chosen to double down on what the persona already does rather than to patch
+   * its weakness — a Rusher that burns longer is more of a Rusher, and reading
+   * the fight off the way an enemy behaves is the whole point of having these.
+   */
+  hullAugment?: string;
+  turretAugment?: string;
   /** 0 = never closes, 1 = always charges. */
   aggression: number;
   /** Multiplier on the persona's aim error; a sniper is sharper than a rusher. */
@@ -34,6 +42,8 @@ export const PERSONAS: Record<PersonaId, Persona> = {
     displayName: 'Rusher',
     hull: 'wasp',
     turret: 'firebird',
+    hullAugment: 'wasp.adrenaline',
+    turretAugment: 'firebird.slow_burn',
     aggression: 1,
     aimSkill: 1.5,
     reactionScale: 0.9,
@@ -50,6 +60,8 @@ export const PERSONAS: Record<PersonaId, Persona> = {
     displayName: 'Sniper',
     hull: 'mammoth',
     turret: 'shaft',
+    hullAugment: 'mammoth.spall_liner',
+    turretAugment: 'shaft.match_ammo',
     aggression: 0.15,
     aimSkill: 0.55,
     // Very slow to react to flankers — the classic sniper failure mode.
@@ -67,6 +79,8 @@ export const PERSONAS: Record<PersonaId, Persona> = {
     displayName: 'Support',
     hull: 'hunter',
     turret: 'isida',
+    hullAugment: 'hunter.field_repair',
+    turretAugment: 'isida.field_medic',
     aggression: 0.35,
     aimSkill: 1.1,
     reactionScale: 1.1,
@@ -83,6 +97,10 @@ export const PERSONAS: Record<PersonaId, Persona> = {
     displayName: 'Bruiser',
     hull: 'titan',
     turret: 'vulcan',
+    // The augment the player is most likely to meet: a Titan that can afford to
+    // sit overheated, behind a Vulcan that sets you alight while it is.
+    hullAugment: 'titan.thermal_sink',
+    turretAugment: 'vulcan.ignition',
     aggression: 0.5,
     aimSkill: 1.0,
     reactionScale: 1.0,
@@ -100,6 +118,8 @@ export const PERSONAS: Record<PersonaId, Persona> = {
     displayName: 'Flanker',
     hull: 'hornet',
     turret: 'ricochet',
+    hullAugment: 'hornet.kill_rush',
+    turretAugment: 'ricochet.rebound',
     aggression: 0.75,
     aimSkill: 0.9,
     reactionScale: 0.95,
@@ -116,6 +136,8 @@ export const PERSONAS: Record<PersonaId, Persona> = {
     displayName: 'Objective',
     hull: 'viking',
     turret: 'twins',
+    hullAugment: 'viking.supply_chain',
+    turretAugment: 'twins.tight_grouping',
     aggression: 0.55,
     aimSkill: 1.05,
     reactionScale: 1.0,
