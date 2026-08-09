@@ -371,8 +371,16 @@ never made weak or passive, only *slow* and *imprecise*.
 4. **Dynamic** — a rolling 90-second K/D window nudges bot reaction and aim, capped so a genuinely
    good player can still reach total dominance.
 
-Four presets ship — Recruit, Standard, Veteran, Nightmare — with the advantage shrinking to zero at
-the top. Every knob is visible in the garage's "Your edge" panel.
+Four presets ship — Recruit, Standard, Veteran, Nightmare — and every layer above shrinks as you
+climb, down to nothing at the top: on Nightmare the bots react in 120 ms, hold their aim and take no
+handicap of any kind.
+
+The equipment gap is the exception, and it never closes. On every preset your hull and turret are
+tiered above anything else on the field, squadmates included, because the tank you drive is meant to
+read as the best one in the battle — difficulty decides how much of an edge that is, not whether
+there is one. The single thing that outclasses it is the Overseer, whose health pool is authored for
+the size of the raid squad and sits outside the tier table entirely. Every knob is visible in the
+garage's "Your edge" panel.
 
 ## Presentation
 
@@ -422,6 +430,7 @@ tools/
   validate-maps.mjs
   raid-smoke.mjs
   augment-smoke.mjs
+  turret-dps.mjs
 ```
 
 ## Map validation
@@ -477,6 +486,30 @@ fits every augment in the table to a real battle in turn, holds the trigger down
 anything that comes back non-finite, non-positive or missing. It also pins the two things about
 Ignition worth a regression test rather than a play test: that it does nothing at all until the
 barrel is overheated, and that once it is, the burn alone takes a serious bite out of a tank.
+
+## Turret damage harness
+
+A turret's `damage` field means something different in every firing mode — a whole shell for Magnum,
+a tenth of a second of contact for Firebird, one pellet of eight for Hammer — so the numbers in
+`turrets.json` are not comparable to each other and never were. The only figure that compares is
+damage actually put into a tank per second of trigger, with the reload, clip, fuel drain, heat
+ceiling, spin-up, chain falloff and range band all in play.
+
+```bash
+npm run turret-dps                 # every turret, 12 s each, at its own working range
+node tools/turret-dps.mjs 20       # longer, for the slow-cycling guns
+node tools/turret-dps.mjs 20 veteran
+```
+
+puts every gun on a firing range against a pinned target that cannot shoot back, drive off or die,
+holds the trigger — releasing it at the top of the charge for the two guns that fire that way — and
+prints the result sorted. Figures are for the player's own tank, so they include the difficulty
+profile's turret tier: the gun as you actually drive it rather than as authored. It fails if any gun
+puts out nothing at all, which is the cheap way to catch a firing mode that silently stopped working.
+
+It is what caught the close-range guns landing for a third of the field's output while reading fine
+in the data, and the tick-based turrets being the only ones in the game a Double Damage box did
+nothing for.
 
 ## Balance figures
 

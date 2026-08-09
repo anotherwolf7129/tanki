@@ -6,6 +6,13 @@
  * value below: bots are never made weak or passive, only *slow* and
  * *imprecise*. Health and rate of fire stay respectable; reaction time and aim
  * error carry the difficulty.
+ *
+ * On top of that sits the equipment gap, and it never closes: on every preset
+ * the player's hull and turret are tiered above anything else on the field,
+ * squadmates included. Difficulty decides how *much* of an edge that is, not
+ * whether there is one — the tank you drive is meant to read as the best one in
+ * the battle, and the only thing that outclasses it is the Overseer, whose pool
+ * is authored outside this table entirely.
  */
 export interface DifficultyProfile {
   name: string;
@@ -70,8 +77,8 @@ export const DIFFICULTIES: Record<string, DifficultyProfile> = {
       overdriveChargeRate: 3,
       damageDealtMultiplier: 1.15,
       damageTakenMultiplier: 0.85,
-      hullTierMultiplier: 1.25,
-      turretTierMultiplier: 1.15,
+      hullTierMultiplier: 1.45,
+      turretTierMultiplier: 1.35,
       spawnProtection: 3,
     },
     dynamic: { enabled: true, targetKD: 3, adjustRate: 0.2 },
@@ -100,15 +107,15 @@ export const DIFFICULTIES: Record<string, DifficultyProfile> = {
       overdriveChargeRate: 2,
       damageDealtMultiplier: 1,
       damageTakenMultiplier: 1,
-      hullTierMultiplier: 1.15,
-      turretTierMultiplier: 1,
+      hullTierMultiplier: 1.35,
+      turretTierMultiplier: 1.25,
       spawnProtection: 3,
     },
     dynamic: { enabled: true, targetKD: 2.5, adjustRate: 0.2 },
   },
   veteran: {
     name: 'Veteran',
-    blurb: 'Bots react in a third of a second and hold their aim. Equipment gap only.',
+    blurb: 'Bots react in a third of a second and hold their aim. Your gear is still the best on the field.',
     bot: {
       hullTierMultiplier: 0.9,
       turretTierMultiplier: 0.95,
@@ -130,15 +137,15 @@ export const DIFFICULTIES: Record<string, DifficultyProfile> = {
       overdriveChargeRate: 1.3,
       damageDealtMultiplier: 1,
       damageTakenMultiplier: 1,
-      hullTierMultiplier: 1,
-      turretTierMultiplier: 1,
+      hullTierMultiplier: 1.2,
+      turretTierMultiplier: 1.15,
       spawnProtection: 3,
     },
     dynamic: { enabled: false, targetKD: 2, adjustRate: 0.15 },
   },
   nightmare: {
     name: 'Nightmare',
-    blurb: 'No advantage of any kind. Same gear, 120 ms reactions, converging aim.',
+    blurb: 'No handicap of any kind — 120 ms reactions, converging aim. Only your gear is still ahead.',
     bot: {
       hullTierMultiplier: 1,
       turretTierMultiplier: 1,
@@ -160,8 +167,8 @@ export const DIFFICULTIES: Record<string, DifficultyProfile> = {
       overdriveChargeRate: 1,
       damageDealtMultiplier: 1,
       damageTakenMultiplier: 1,
-      hullTierMultiplier: 1,
-      turretTierMultiplier: 1,
+      hullTierMultiplier: 1.15,
+      turretTierMultiplier: 1.15,
       spawnProtection: 3,
     },
     dynamic: { enabled: false, targetKD: 1.5, adjustRate: 0 },

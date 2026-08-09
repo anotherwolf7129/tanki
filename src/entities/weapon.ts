@@ -32,6 +32,14 @@ const TURRET_COLOURS: Record<string, number> = {
   cataclysm: 0xff5a3c,
 };
 
+/**
+ * How full a drained tank has to refill before the trigger works again. The
+ * fraction sets the rhythm rather than the uptime — that is fixed by the drain
+ * and recharge rates — and a low one chops a held stream into stutters too
+ * short to finish anything with.
+ */
+const FUEL_UNLOCK_FRACTION = 0.5;
+
 /** Full damage inside `rangeMaxDamage`, linear down to `weakDamage`, then flat. */
 export function damageAtRange(t: TurretDef, base: number, weak: number, d: number): number {
   if (t.hardCap != null && d > t.hardCap) return 0;
@@ -539,7 +547,10 @@ export class Weapon {
         this.applyAllySideEffect(other);
         continue;
       }
-      const dmg = damageAtRange(this.def, this.def.damage, this.def.weakDamage, dist) * ticks;
+      const dmg =
+        damageAtRange(this.def, this.def.damage, this.def.weakDamage, dist) *
+        ticks *
+        this.streamDamageScale;
       arena.damage(other, dmg, this.owner, { kind: 'direct', at: to });
       if (this.def.applies) {
         const a = this.def.applies;
@@ -592,7 +603,8 @@ export class Weapon {
     if (healing) {
       arena.heal(target, (this.def.healPerTick ?? 0) * ticks, this.owner);
     } else if (arena.areEnemies(this.owner, target)) {
-      arena.damage(target, this.def.damage * ticks, this.owner, { kind: 'direct', at: target.centre() });
+      const dmg = this.def.damage * ticks * this.streamDamageScale;
+      arena.damage(target, dmg, this.owner, { kind: 'direct', at: target.centre() });
     }
   }
 
@@ -618,7 +630,7 @@ export class Weapon {
     }
 
     let current = primary;
-    let damage = this.def.damage * ticks;
+    let damage = this.def.damage * ticks * this.streamDamageScale;
     const hit = new Set<Tank>([current]);
     const points: CANNON.Vec3[] = [current.centre()];
 
@@ -648,6 +660,20 @@ export class Weapon {
     return this.def.reloadTime / Math.max(0.1, rate);
   }
 
+  /**
+   * What one tick of a stream is worth after the shooter's buffs.
+   *
+   * The tick-based turrets used to be the only guns in the game a Double Damage
+   * box did nothing for — the multiplier lives in `fireShell`, and a cone, a
+   * beam and an arc never go near it. Rate-of-fire buffs missed them for the
+   * same reason from the other side: a stream has no reload to shorten, so
+   * Supercharge landed on every turret except the four that have to be in the
+   * enemy's face to fire at all. Both fold into the tick instead.
+   */
+  private get streamDamageScale(): number {
+    return this.owner.status.damageDealtScale * Math.max(0.1, this.owner.status.fireRateScale);
+  }
+
   private beginReload(): void {
     if (this.reloading) return;
     this.reloading = true;
@@ -659,7 +685,7 @@ export class Weapon {
     if (!f) return;
     if (!this.intent.fire || this.fuelLocked) {
       this.fuel = Math.min(f.capacity, this.fuel + f.rechargePerSec * dt);
-      if (this.fuel >= f.capacity * 0.35) this.fuelLocked = false;
+      if (this.fuel >= f.capacity * FUEL_UNLOCK_FRACTION) this.fuelLocked = false;
     }
   }
 

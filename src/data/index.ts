@@ -62,6 +62,24 @@ export function barrelReach(h: HullDef, t: TurretDef): number {
 }
 
 /**
+ * Sustained output for the turrets that fire in ticks rather than shots, in
+ * damage per second, or `null` for a turret whose card should quote per-shot
+ * damage instead.
+ *
+ * A cone, a beam and an arc all deal their `damage` ten times a second, so the
+ * raw figure is a tenth of what the gun actually does and reads next to a
+ * Magnum's 400 as if the thing were broken. Fuel is folded in as well: uptime
+ * settles at `recharge / (drain + recharge)` regardless of how the trigger is
+ * used, so the number is what the turret sustains, not what it peaks at.
+ */
+export function tickDamagePerSecond(t: TurretDef): number | null {
+  const rate = t.cone?.tickRate ?? t.beam?.tickRate ?? t.chain?.tickRate;
+  if (rate == null) return null;
+  const uptime = t.fuel ? t.fuel.rechargePerSec / (t.fuel.drainPerSec + t.fuel.rechargePerSec) : 1;
+  return t.damage * rate * uptime;
+}
+
+/**
  * Preferred engagement band for a turret, in metres. Bots use this to decide
  * how close to close. Derived from the range table rather than hand-authored so
  * new turrets pick up sensible behaviour for free.

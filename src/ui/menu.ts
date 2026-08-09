@@ -1,4 +1,4 @@
-import { HULLS, HULL_IDS, TURRETS, TURRET_IDS, preferredRange } from '../data';
+import { HULLS, HULL_IDS, TURRETS, TURRET_IDS, preferredRange, tickDamagePerSecond } from '../data';
 import {
   applyHullAugment,
   applyTurretAugment,
@@ -123,6 +123,9 @@ export class Menu {
     const hull = applyHullAugment(HULLS[loadout.hull], hullAug);
     const turret = applyTurretAugment(TURRETS[loadout.turret], turretAug);
     const [near, far] = preferredRange(turret);
+    // A stream turret has no per-shot damage worth quoting and no reload to
+    // quote either, so it gets the sustained figure in place of both.
+    const sustained = tickDamagePerSecond(turret);
     // Gauss only splashes on its super shot, which is still a reason to show
     // the blast radius on the card — it is why you hold the trigger.
     const blast = turret.splash ?? turret.alt?.splash;
@@ -195,8 +198,12 @@ export class Menu {
               </select>
             </label>
             <div class="stats">
-              <span><b>${Math.round(turret.damage * profile.player.turretTierMultiplier)}</b> dmg</span>
-              <span><b>${turret.reloadTime.toFixed(2)}</b>s reload</span>
+              ${
+                sustained != null
+                  ? `<span><b>${Math.round(sustained * profile.player.turretTierMultiplier)}</b> dmg/s</span>`
+                  : `<span><b>${Math.round(turret.damage * profile.player.turretTierMultiplier)}</b> dmg</span>
+              <span><b>${turret.reloadTime.toFixed(2)}</b>s reload</span>`
+              }
               <span><b>${turret.rotationSpeed}</b> °/s</span>
               <span><b>${Math.round(near)}–${Math.round(far)}</b> m band</span>
               ${blast ? `<span><b>${blast.radius.toFixed(1)}</b> m blast</span>` : ''}
