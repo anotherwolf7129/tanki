@@ -6,6 +6,9 @@ import type { Battle, BattleSnapshot } from '../game/battle';
 const PANEL = 'rgba(12,16,22,0.72)';
 const ACCENT = '#2ee6a8';
 
+/** Buffs whose status magnitude is a strength a drone can have multiplied. */
+const AMPLIFIED = new Set<string>(['doubleArmor', 'doubleDamage', 'nitro']);
+
 /**
  * Canvas HUD. Kept off the DOM so it can be redrawn every frame without layout
  * cost, and so damage numbers can be projected from world space cheaply.
@@ -602,6 +605,19 @@ export class Hud {
     const y = h - 66;
 
     ctx.save();
+    // The drone changes what every one of these icons does, so it is named
+    // above them rather than left in the garage where it was chosen.
+    const drone = snap.player.drone;
+    if (drone) {
+      ctx.textAlign = 'center';
+      ctx.font = '600 10px system-ui, sans-serif';
+      ctx.fillStyle = '#9aa4b2';
+      const notes = [
+        drone.supplyAmplify && drone.supplyAmplify !== 1 ? `×${drone.supplyAmplify} EFFECT` : null,
+        drone.exclusiveBuffs ? 'ONE BUFF AT A TIME' : null,
+      ].filter(Boolean);
+      ctx.fillText(`${drone.displayName.toUpperCase()}${notes.length ? ` — ${notes.join(' · ')}` : ''}`, w / 2, y - 10);
+    }
     SUPPLY_ORDER.forEach((kind, i) => {
       const def = SUPPLIES[kind];
       const state = snap.player.supplies[kind];
@@ -788,11 +804,15 @@ export class Hud {
     let x = w / 2 - ((effects.length - 1) * 96) / 2;
     for (const e of effects) {
       const [label, colour] = labels[e.kind] ?? [e.kind.toUpperCase(), '#9aa4b2'];
+      // A drone-amplified buff is a different effect from the stock one, and
+      // the pill has to say so — quadruple damage looks exactly like double
+      // damage until someone dies faster than they should.
+      const amplified = AMPLIFIED.has(e.kind) && e.magnitude > 1;
       ctx.fillStyle = PANEL;
       roundRect(ctx, x - 44, h - 152, 88, 22, 6);
       ctx.fill();
       ctx.fillStyle = colour;
-      ctx.fillText(`${label} ${e.remaining.toFixed(0)}s`, x, h - 141);
+      ctx.fillText(`${label}${amplified ? `×${e.magnitude}` : ''} ${e.remaining.toFixed(0)}s`, x, h - 141);
       x += 96;
     }
     ctx.restore();

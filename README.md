@@ -80,7 +80,12 @@ stackable component, with Firebird thawing allies, Freeze extinguishing burn, an
 **Supplies** on the 2016-rebalance ruleset: 40-second durations, a 10-second cross-cooldown rather
 than a lockout, Mine and Repair Kit exempt from each other, and box pickups that bypass Smart
 Cooldowns entirely — which is what makes drop-zone control worth fighting over. Plus the Gold Box,
-announced, marked on the minimap, dropped from the sky, and contested by the bots.
+announced, marked on the minimap, dropped from the sky, and contested by the bots. You start with
+**15 of every kind** (`PLAYER_SUPPLY_STOCK`), because Smart Cooldowns rather than scarcity are what
+stop supplies being spammed, and a stock of three ran dry ten minutes before a battle ended.
+
+**Drones** — one optional escort fitted in the garage, which modifies supplies rather than the hull
+or the turret (see below).
 
 **Five modes**: Deathmatch, Team Deathmatch, Capture the Flag (with the wiki's pickup/transfer/
 delivery scoring, banked and only paid out on delivery), Control Points, and **Boss Raid** — you and
@@ -109,7 +114,7 @@ low-gravity Madness. Geometry is original primitives, not ripped assets.
 
 **The AI**, which is where the real design work lives — see below.
 
-Not implemented: the Rugby / Siege / Assault modes, modules, drones, the
+Not implemented: the Rugby / Siege / Assault modes, modules, the
 crystal economy and purchasing, and audio. The modification tier system is collapsed to a single
 tier per item plus a flat multiplier, which the difficulty profile uses as the equipment gap.
 
@@ -152,6 +157,47 @@ reads as a build the enemy usually runs rather than as a fixed serial number. Wh
 augments at all is part of the equipment gap: on Recruit they fight stock and the garage says so.
 The Overseer's fittings are authored rather than rolled, because the raid is balanced against that
 exact boss.
+
+## Drones
+
+A third garage slot (`src/data/drones.ts`), fitted independently of the hull and turret because a
+drone does not modify either of them — it modifies *supplies*, which are the same whatever you are
+driving. That is the whole reason it is not a third augment table: an augment is authored per item
+and folded into that item's definition before the battle starts, and there is no item here to fold
+anything into. The entire system is two fields, and the only place in the simulation that reads them
+is `Tank.applySupply`.
+
+**Overcharger** — the one drone that ships. Whatever supply you use lands *twice over*:
+
+| Supply | Stock | Overcharger |
+|---|---|---|
+| Double Damage | ×2 damage dealt | **×4** |
+| Double Armor | ×0.5 damage taken | **×0.25** |
+| Speed Boost | ×1.4 speed | **×1.96** |
+| Repair Kit | 1,000 instant + 3,000 over 3 s | **doubled** |
+| Mine | 1,800 blast | **doubled** |
+
+and it costs you the ability to run more than one of them. The reactor holds a single charge: Double
+Armor, Double Damage and Speed Boost lock each other out, and starting one *ends* whichever was
+already running rather than being refused — the supply you just spent always does something. Repair
+Kit and Mine leave nothing running and are unaffected in either direction. Durations are untouched
+throughout: the kit hits harder, it does not last longer. The exclusivity holds for every source of
+a buff, including Viking and Dictator's requisition Overdrive, which grants a drone-fitted tank the
+last buff it applies rather than all of them.
+
+Stacked against 15 of each supply in the stock loadout, that is a real trade rather than an upgrade:
+without a drone you can have all three buffs up at once and spend them freely, and with one you get
+a single buff at twice the strength.
+
+Mechanically the strength lives in the status effect's `magnitude`, which now means *how many times
+over the effect is applied* — 1 from a supply, 2 from an amplifying drone — and the three buffs
+compound it (`2 ** magnitude`, `0.5 ** magnitude`, `1.4 ** magnitude`) rather than each source
+special-casing itself. Everything downstream reads the same multipliers it always did, which is why
+quadruple damage lifts splash, burn-on-hit and every firing mode without a single one of them
+knowing a drone exists. The HUD marks an amplified buff with `×2` on its pill, and names the fitted
+drone above the supply tray.
+
+Drones are the player's alone: bots and the Overseer fight with the stock ruleset.
 
 ## Boss Raid
 
@@ -362,7 +408,8 @@ Layered per the spec, in `src/data/difficulty.ts`. The design rule constrains ev
 never made weak or passive, only *slow* and *imprecise*.
 
 1. **Legible** — equipment gap (hull and turret tier multipliers, shown explicitly in the garage),
-   supply economy, overdrive charge rate.
+   supply economy (15 of each at spawn against a bot's one or two, and drones are yours alone),
+   overdrive charge rate.
 2. **Perceptual** — reaction delay, an aim-error floor bots never converge past, peripheral
    blindness so flanking always works, and single-target focus so you can rotate between bots.
 3. **Soft assists** — turret magnetism inside a small screen cone, damage rounded in the player's
@@ -420,7 +467,7 @@ src/
   core/      loop helpers, input, math
   physics/   cannon-es world, collision layers, vehicle controller
   entities/  tank, weapon, projectile, pickup, status
-  data/      turrets.json, hulls.json, augments, maps/, supplies, modes, difficulty, raid
+  data/      turrets.json, hulls.json, augments, drones, maps/, supplies, modes, difficulty, raid
   ai/        navgrid, perception, behaviour tree, personas, team board, boss, squad channel
   render/    scene, procedural textures, materials, tank meshes, effects, camera, HUD
   modes/     dm, tdm, ctf, cp, boss raid
@@ -486,6 +533,24 @@ fits every augment in the table to a real battle in turn, holds the trigger down
 anything that comes back non-finite, non-positive or missing. It also pins the two things about
 Ignition worth a regression test rather than a play test: that it does nothing at all until the
 barrel is overheated, and that once it is, the burn alone takes a serious bite out of a tank.
+
+## Drone harness
+
+What a drone does is invisible from outside the damage funnel. One that quietly failed to amplify,
+or whose exclusivity cancelled a buff it had no business touching, looks exactly like one that
+works — you would notice as a target dying slightly slower than it should have, ten minutes into a
+battle.
+
+```bash
+npm run drone-smoke
+```
+
+fits every drone in the table to a live battle, applies each supply in turn and reads the resulting
+multipliers straight out of the status set: that Double Damage is ×4 and not ×2, that Double Armor
+leaves a quarter, that an exclusive drone has ended the buff it replaced and a non-exclusive one has
+not, and that none of it reaches the physics as a NaN. It checks the stock ruleset in the same run —
+three buffs stacking at ×2 and ×0.5 with no drone fitted — and that a battle starts you with a full
+stock of every supply.
 
 ## Turret damage harness
 

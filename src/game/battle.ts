@@ -2,6 +2,7 @@ import * as CANNON from 'cannon-es';
 import * as THREE from 'three';
 import { hull as hullDef, turret as turretDef } from '../data';
 import { augmentFor, randomAugmentFor, type AugmentDef } from '../data/augments';
+import { droneFor } from '../data/drones';
 import { DIFFICULTIES, DynamicDifficulty, LAST_HIT_COOLDOWN, LAST_HIT_FLOOR, type DifficultyProfile } from '../data/difficulty';
 import { map as mapDef } from '../data/maps';
 import type { BattleSettings } from '../data/modes';
@@ -19,7 +20,7 @@ import {
   bossHealth,
   phaseFor,
 } from '../data/raid';
-import { SELF_DESTRUCT_TIME, SUPPLY_ORDER } from '../data/supplies';
+import { PLAYER_SUPPLY_STOCK, SELF_DESTRUCT_TIME, SUPPLY_ORDER } from '../data/supplies';
 import { BossController } from '../ai/boss';
 import { BotController } from '../ai/bot';
 import { NavGrid } from '../ai/navgrid';
@@ -54,6 +55,11 @@ export interface PlayerLoadout {
    * augment you had picked for the one you are coming back to.
    */
   augments?: Record<string, string>;
+  /**
+   * Fitted drone, or null for none. Not keyed per item like the augments: a
+   * drone modifies supplies, which are the same whatever you are driving.
+   */
+  drone?: string | null;
 }
 
 const RESPAWN_TIME = 3;
@@ -169,6 +175,7 @@ export class Battle implements Arena {
       turretId: loadout.turret,
       hullAugmentId: loadout.augments?.[loadout.hull],
       turretAugmentId: loadout.augments?.[loadout.turret],
+      droneId: loadout.drone,
     });
 
     if (this.mode instanceof BossRaidMode) {
@@ -177,9 +184,12 @@ export class Battle implements Arena {
       this.spawnBots(teamed, playerTeam);
     }
 
-    // Everyone starts with one of each supply so the first minute has options.
+    // The player starts with a full field stock of every kind, so supplies are
+    // a tactic for the whole battle rather than three of each spent in the
+    // first engagement. Bots are stocked as before — this is the player's edge,
+    // and it is listed with the rest of them in the setup screen.
     for (const kind of SUPPLY_ORDER) {
-      this.player.giveSupply(kind, 3);
+      this.player.giveSupply(kind, PLAYER_SUPPLY_STOCK);
       for (const bot of this.tanks) {
         if (bot.isPlayer || bot.isBoss) continue;
         // A raid squad is stocked properly: it is meant to survive a boss fight,
@@ -339,6 +349,7 @@ export class Battle implements Arena {
     turretId: string;
     hullAugmentId?: string | null;
     turretAugmentId?: string | null;
+    droneId?: string | null;
   }): Tank {
     const h = hullDef(spec.hullId);
     const t = turretDef(h.fixedTurret ?? spec.turretId);
@@ -356,6 +367,7 @@ export class Battle implements Arena {
         turret: t,
         hullAugment: augmentFor('hull', h.id, spec.hullAugmentId),
         turretAugment: augmentFor('turret', t.id, spec.turretAugmentId),
+        drone: droneFor(spec.droneId),
         hullMultiplier: spec.isBoss ? 1 : (spec.hullMultiplier ?? p.hullTierMultiplier),
         turretMultiplier: spec.isBoss ? 1 : p.turretTierMultiplier,
         spawnProtection: p.spawnProtection,
@@ -646,8 +658,8 @@ export class Battle implements Arena {
     this.projectiles.spawn(spec);
   }
 
-  spawnMine(owner: Tank, position: CANNON.Vec3): void {
-    this.mines.spawn(owner, position);
+  spawnMine(owner: Tank, position: CANNON.Vec3, power = 1): void {
+    this.mines.spawn(owner, position, power);
   }
 
   awardBattlePoints(tank: Tank, points: number): void {
