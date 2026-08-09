@@ -52,7 +52,7 @@ export const SUPPLY_ORDER: SupplyKind[] = ['repair', 'armor', 'damage', 'nitro',
  * running dry ten minutes early only made the last third of a battle quieter.
  * Smart Cooldowns, not scarcity, are what stop supplies being spammed.
  */
-export const PLAYER_SUPPLY_STOCK = 15;
+export const PLAYER_SUPPLY_STOCK = 999;
 
 /** Smart Cooldowns: using one supply briefly locks the others, not itself. */
 export const CROSS_COOLDOWN = 10;
