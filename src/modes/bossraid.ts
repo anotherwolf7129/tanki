@@ -8,6 +8,7 @@ import {
   BREACH_COS,
   BREACH_MULTIPLIER,
   BOSS_SELF_DAMAGE,
+  HEAL_POINTS_SCALE,
   KILL_HEAL_FRACTION,
   PLAYER_BOSS_DAMAGE,
   POINTS_PER_DAMAGE,
@@ -278,10 +279,15 @@ export class BossRaidMode extends BaseMode {
 
     for (const t of arena.tanks) {
       if (t === this.boss) continue;
+      // Health put back into a squadmate pays the same as health taken off the
+      // Overseer. A raid the squad survives is a raid the squad wins, so the
+      // medic holding everyone above the floor is doing the same job as the
+      // Thunder — and now has the same line on the scoreboard to prove it.
+      const contribution = t.damageDealt + t.healingDone * HEAL_POINTS_SCALE;
       const seen = this.damageSeen.get(t.id);
-      this.damageSeen.set(t.id, t.damageDealt);
-      if (seen === undefined || t.damageDealt <= seen) continue;
-      t.addBattlePoints((t.damageDealt - seen) * POINTS_PER_DAMAGE);
+      this.damageSeen.set(t.id, contribution);
+      if (seen === undefined || contribution <= seen) continue;
+      t.addBattlePoints((contribution - seen) * POINTS_PER_DAMAGE);
     }
   }
 

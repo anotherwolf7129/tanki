@@ -35,7 +35,27 @@ export interface BotDeps {
   squad?: SquadChannel;
 }
 
-type Intent = 'engage' | 'retreat' | 'objective' | 'pickup' | 'patrol' | 'escort' | 'evade' | 'rescue';
+type Intent = 'engage' | 'retreat' | 'objective' | 'pickup' | 'patrol' | 'escort' | 'evade' | 'rescue' | 'heal';
+
+/**
+ * How long a medic keeps a patient after picking one, so two Isidas do not
+ * swap patients every behaviour tick as the health bars cross each other.
+ */
+const PATIENT_CLAIM = 3;
+
+/**
+ * Fraction of beam range the healer holds at.
+ *
+ * Near the far end of it rather than comfortably inside: whatever is hurting
+ * the patient badly enough to need a medic is, by definition, in range of the
+ * patient — and a healer parked halfway between the two is in range of it too.
+ * Measured across raid runs, closing this to the middle of the band roughly
+ * quadrupled how often the squad's medic was the one dying.
+ */
+const HEAL_STANDOFF = 0.82;
+
+/** How far behind the player an escorting medic parks itself. */
+const ESCORT_GAP = 14;
 
 /**
  * One bot. Decisions run on a 10 Hz behaviour tree over a blackboard; steering,
@@ -53,6 +73,8 @@ export class BotController implements AiController {
 
   intent: Intent = 'patrol';
   target: Tank | null = null;
+  /** The ally this bot is currently putting its beam into, if any. */
+  patient: Tank | null = null;
   private path: CANNON.Vec3[] = [];
   private pathIndex = 0;
   private goal: CANNON.Vec3 | null = null;
@@ -114,6 +136,107 @@ export class BotController implements AiController {
     this.goal = null;
     this.evadeTo = null;
     this.intent = 'patrol';
+    this.dropPatient();
+  }
+
+  // ---- healing ----------------------------------------------------------
+
+  /**
+   * Healing is a property of the gun, not of the personality behind it.
+   *
+   * Anything holding an Isida gets this branch, so a squad that happens to
+   * field two of them has two healers rather than one healer and one bot
+   * carrying a beam it never points at anybody. The persona only sets *how
+   * readily* it diverts — see `healThreshold` — and a bot whose persona says
+   * nothing about healing still tops up a squadmate that is genuinely in
+   * trouble rather than watching them die with a repair beam in its hands.
+   */
+  get canHeal(): boolean {
+    return this.self.turretDef.special?.includes('healsAllies') === true && this.healRange > 0;
+  }
+
+  private get healRange(): number {
+    return this.self.turretDef.beam?.range ?? 0;
+  }
+
+  /** Health fraction below which an ally is worth diverting to. */
+  private get healThreshold(): number {
+    return this.persona.healThreshold > 0 ? this.persona.healThreshold : 0.7;
+  }
+
+  private patientKey(ally: Tank): string {
+    return `heal:${ally.id}`;
+  }
+
+  private dropPatient(): void {
+    if (!this.patient) return;
+    this.deps.board.release(this.patientKey(this.patient), this.self.id);
+    this.patient = null;
+    this.self.weapon.preferBeamTarget(null);
+  }
+
+  /**
+   * Who to heal. Ranked by how hurt they are and how far away, then claimed on
+   * the team board — which is the whole mechanism that stops two Isidas piling
+   * onto the same lightly-scratched squadmate while a third raider burns down
+   * untouched. A medic that cannot get the claim takes the next name on the
+   * list instead of arguing for it.
+   */
+  wantsToHeal(): boolean {
+    if (!this.canHeal || this.self.carryingFlag) {
+      // Carrying the flag outranks everything, healing included. A medic that
+      // stops halfway home to top somebody up is a medic that loses the flag,
+      // and the objective branch below this one never gets to run.
+      this.dropPatient();
+      return false;
+    }
+    const arena = this.deps.arena;
+    const now = arena.time;
+    const threshold = this.healThreshold;
+    const reach = this.healRange * 3;
+    const escorting = this.persona.escortsPlayer;
+    const quarry = this.deps.squad?.rescue ?? null;
+
+    const ranked: { tank: Tank; score: number }[] = [];
+    for (const ally of arena.tanks) {
+      if (ally === this.self || !ally.alive || ally.isBoss) continue;
+      if (!arena.areAllies(this.self, ally)) continue;
+      if (ally.healthFraction >= threshold) continue;
+      const dist = ally.position.distanceTo(this.self.position);
+      if (dist > reach) continue;
+      let score = (1 - ally.healthFraction) * 140 - dist * 0.8;
+      // The player is the one health bar in the fight somebody is watching.
+      if (ally.isPlayer) score += escorting ? 45 : 15;
+      // Whoever the Overseer has fixated on is losing health fastest.
+      if (ally === quarry) score += 40;
+      // Sticky: re-picking a patient every tick makes the beam stutter between
+      // two people and heal neither.
+      if (ally === this.patient) score += 25;
+      ranked.push({ tank: ally, score });
+    }
+    if (!ranked.length) {
+      this.dropPatient();
+      return false;
+    }
+    ranked.sort((a, b) => b.score - a.score);
+
+    for (const { tank } of ranked) {
+      if (!this.deps.board.claim(this.patientKey(tank), this.self.id, now, PATIENT_CLAIM)) continue;
+      if (this.patient && this.patient !== tank) this.dropPatient();
+      this.patient = tank;
+      return true;
+    }
+    // Everybody hurt is already somebody else's patient: go and fight instead.
+    this.dropPatient();
+    return false;
+  }
+
+  /** Where an escorting medic wants to be, or null if it is not escorting. */
+  escortAnchor(): Tank | null {
+    if (!this.persona.escortsPlayer) return null;
+    const player = this.deps.arena.tanks.find((t) => t.isPlayer);
+    if (!player || !player.alive || !this.deps.arena.areAllies(this.self, player)) return null;
+    return player;
   }
 
   // ---- target selection -------------------------------------------------
@@ -169,6 +292,20 @@ export class BotController implements AiController {
    * resets it. That one mechanic does most of the work of looking intelligent.
    */
   private updateAim(dt: number): void {
+    // A beam onto a squadmate is not a skill check, so it gets none of the
+    // error model below: the medic points straight at them. What makes healing
+    // hard for a bot is deciding who and getting there, not the last two
+    // degrees of turret slew.
+    const patient = this.intent === 'heal' ? this.patient : null;
+    if (patient && patient.alive) {
+      const muzzle = this.self.muzzle(new CANNON.Vec3());
+      const delta = patient.centre().vsub(muzzle);
+      const [minPitch, maxPitch] = this.self.pitchLimits;
+      this.self.desiredYaw = Math.atan2(delta.x, delta.z);
+      this.self.desiredPitch = clamp(Math.atan2(delta.y, Math.hypot(delta.x, delta.z)), minPitch, maxPitch);
+      return;
+    }
+
     const track = this.currentTrack();
     if (!track) {
       // Sweep the turret toward where the hull is heading when idle.
@@ -238,6 +375,24 @@ export class BotController implements AiController {
   private updateFiring(dt: number): void {
     const weapon = this.self.weapon;
     this.holdFire = Math.max(0, this.holdFire - dt);
+
+    // Healing runs ahead of every trigger rule below it, because those rules
+    // are about shooting: they gate on a perception track, and an ally is not
+    // one. Without this branch an Isida bot holds a repair beam it is
+    // structurally incapable of ever firing at a friend.
+    const patient = this.intent === 'heal' ? this.patient : null;
+    if (patient && patient.alive) {
+      weapon.preferBeamTarget(patient);
+      const muzzle = this.self.muzzle(new CANNON.Vec3());
+      const to = patient.centre();
+      const aimed = Math.abs(angleDelta(this.self.turretYaw, this.self.desiredYaw)) < (weapon.def.beam?.lockConeDeg ?? 12) * DEG;
+      weapon.intent.alt = false;
+      weapon.intent.scope = false;
+      weapon.intent.fire = aimed && muzzle.distanceTo(to) <= this.healRange;
+      return;
+    }
+    weapon.preferBeamTarget(null);
+
     const track = this.currentTrack();
 
     if (!track || !track.visible || this.holdFire > 0) {
@@ -402,6 +557,15 @@ export class BotController implements AiController {
     if (this.intent === 'evade' && this.evadeTo) {
       return this.avoid(this.driveTo(this.evadeTo.x, this.evadeTo.z));
     }
+    // Healing and escorting are both "hold this distance from that tank", which
+    // the navmesh is the wrong tool for once you are already next to them.
+    if (this.intent === 'heal' && this.patient?.alive) {
+      return this.avoid(this.stationOn(this.patient, this.healRange * HEAL_STANDOFF, this.healRange));
+    }
+    if (this.intent === 'escort') {
+      const anchor = this.escortAnchor();
+      if (anchor) return this.avoid(this.stationOn(anchor, ESCORT_GAP, ESCORT_GAP * 2.5));
+    }
     // In an engagement, orbit the target inside the weapon's band instead of
     // driving the path blindly.
     const track = this.currentTrack();
@@ -409,6 +573,36 @@ export class BotController implements AiController {
       return this.avoid(this.combatSteering(track));
     }
     return this.avoid(this.followPath());
+  }
+
+  /**
+   * Hold station at `band` metres from another tank, following it as it moves.
+   *
+   * Beyond `handover` the navmesh does the work, because the gap is a
+   * navigation problem — around a building, up a ramp. Inside it the path is
+   * noise: the ally is right there, and what matters is keeping a clean line to
+   * them rather than driving a route computed a second ago.
+   */
+  private stationOn(mate: Tank, band: number, handover: number): { forward: number; turn: number } {
+    const self = this.self.position;
+    const at = mate.position;
+    let dx = self.x - at.x;
+    let dz = self.z - at.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > handover) {
+      this.setGoal(at);
+      return this.followPath();
+    }
+    if (Math.abs(dist - band) < 2.5) {
+      // Parked. Keep the hull square to them so a shove or a near miss does not
+      // swing the whole tank — and with it the beam — off the patient.
+      const bearing = Math.atan2(at.x - self.x, at.z - self.z);
+      return { forward: 0, turn: clamp(angleDelta(this.self.vehicle.yaw, bearing) * 2, -1, 1) };
+    }
+    if (dist < 0.5) return { forward: -0.6, turn: 0 };
+    dx /= dist;
+    dz /= dist;
+    return this.driveTo(at.x + dx * band, at.z + dz * band);
   }
 
   /** Point the hull at a world point and drive, slowing for hard turns. */
@@ -463,6 +657,11 @@ export class BotController implements AiController {
     const boss = squad?.boss;
     if (!squad || !quarry || !boss || !boss.alive) return null;
     if (quarry === this.self || !quarry.alive) return null;
+    // A healer's contribution to a rescue is the quarry still being alive when
+    // the rest of the squad breaks the mark. Sending it to add its own twenty
+    // damage a second to four other guns, while the tank being hunted bleeds
+    // out unattended, is the worse trade in every fight this mechanic appears in.
+    if (this.canHeal && quarry.healthFraction < 1) return null;
     return boss.position.distanceTo(this.self.position) <= RESCUE_REACH ? boss : null;
   }
 
@@ -738,6 +937,28 @@ function buildTree(): Node<BotController> {
     }),
   );
 
+  /**
+   * Put the beam on somebody. Above the objective and above the rescue, and
+   * deliberately so: everything below this branch is a bot deciding what to
+   * shoot, and a healer that only heals once it has run out of things to shoot
+   * is the bug this branch exists to fix. The Overseer's mark is broken by
+   * damage, but a marked squadmate who is being healed through it survives long
+   * enough for the rest of the squad to do that breaking.
+   */
+  const heal = guard<BotController>(
+    'Heal',
+    (bb) => bb.wantsToHeal(),
+    action('Mend', (bb) => {
+      bb.intent = 'heal';
+      // No combat target while healing: the turret has exactly one thing to
+      // point at, and `updateFiring` reads the patient rather than a track.
+      // The goal is left to the steering, which is following a moving tank
+      // rather than driving to a fixed point.
+      bb.target = null;
+      return 'running';
+    }),
+  );
+
   const objective = guard<BotController>(
     'Objective',
     (bb) => {
@@ -804,6 +1025,28 @@ function buildTree(): Node<BotController> {
     }),
   );
 
+  /**
+   * Nobody to heal and nothing worth chasing: get back to the player.
+   *
+   * This is what makes the Medic a *dedicated* healer rather than a bot that
+   * happens to carry an Isida. Without it the healer wanders off on the same
+   * patrol as everyone else and is thirty metres out of beam range at the exact
+   * moment the player needs it — which, from the player's seat, is
+   * indistinguishable from not having a healer at all.
+   */
+  const escort = guard<BotController>(
+    'Escort',
+    (bb) => bb.escortAnchor() !== null,
+    action('StayWithThem', (bb) => {
+      bb.intent = 'escort';
+      // Nothing to shoot at — this branch is only reached once the engage
+      // branch above has failed to find a target — so the turret idles and the
+      // hull closes the gap.
+      bb.target = null;
+      return 'running';
+    }),
+  );
+
   const patrol = action<BotController>('Patrol', (bb) => {
     bb.intent = 'patrol';
     bb.target = null;
@@ -811,5 +1054,15 @@ function buildTree(): Node<BotController> {
     return 'running';
   });
 
-  return selector('Root', [evacuate, rescue, survive, objective, contestPickup, engageBranch, patrol]);
+  return selector('Root', [
+    evacuate,
+    rescue,
+    survive,
+    heal,
+    objective,
+    contestPickup,
+    engageBranch,
+    escort,
+    patrol,
+  ]);
 }

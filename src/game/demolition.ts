@@ -15,6 +15,7 @@ import {
   DEMOLITION_POWER_SCALE,
   ELEVATED_BASE,
   RUBBLE_HEIGHT,
+  RUBBLE_SLOPE_RUN,
   STRUCTURE_INTEGRITY_MAX,
   STRUCTURE_INTEGRITY_MIN,
   STRUCTURE_INTEGRITY_PER_M3,
@@ -26,7 +27,7 @@ import {
 } from '../data/raid';
 import type { MapDef, PropDef } from '../data/schema';
 import type { NavGrid } from '../ai/navgrid';
-import { LAYER, type PhysicsWorld } from '../physics/world';
+import { LAYER, moundShape, type PhysicsWorld } from '../physics/world';
 import type { Arena } from './types';
 
 /**
@@ -59,6 +60,8 @@ import type { Arena } from './types';
  * rubble — it becomes a *hole*, they fall through it, and the high ground is
  * gone for the rest of the fight.
  */
+
+const UP = new THREE.Vector3(0, 1, 0);
 
 type State = 'standing' | 'falling' | 'down';
 
@@ -429,9 +432,19 @@ export class Demolition {
   }
 
   /**
-   * What is left: a rubble field a metre high. Deliberately drivable — a tank
-   * climbs a 1.1 m step — because rubble you can shelter behind would hand the
-   * cover straight back and make the whole system cosmetic.
+   * What is left: a rubble field a metre high, and — this is the part that took
+   * two goes — one a tank can actually get over.
+   *
+   * The collider is a mound with sloped shoulders rather than a slab, because a
+   * hull with no wheels and no contact friction parks against a vertical face
+   * of *any* height rather than climbing it. Sloped, it drives over the pile on
+   * the same physics that carries it up a map ramp, and rolls as it goes: the
+   * body is a real rigid box on a real incline, so clipping the shoulder of a
+   * pile lifts one side and leans the tank over exactly as far as the debris
+   * under that track is high.
+   *
+   * The rubble is still low enough to be no cover at all, which was always the
+   * point — a levelled building has to stay levelled.
    */
   private pile(
     s: Structure,
@@ -452,40 +465,84 @@ export class Demolition {
     const quat = new CANNON.Quaternion();
     quat.setFromEuler(0, yaw, 0);
     s.body = this.deps.phys.addStatic(
-      new CANNON.Box(new CANNON.Vec3(halfWidth, RUBBLE_HEIGHT / 2, halfLength)),
+      moundShape(halfWidth, RUBBLE_HEIGHT / 2, halfLength, RUBBLE_SLOPE_RUN),
       centre,
       quat,
       LAYER.PROP,
     );
 
-    // A few blocks rather than one slab, so a collapse reads as debris.
-    const chunks = Math.min(7, 3 + Math.round(halfLength / 4));
-    const spread = (halfLength * 2) / chunks;
-    for (let i = 0; i < chunks; i++) {
+    // Debris to match the collider: blocks across the crest, then a skirt of
+    // flatter pieces lying on the slopes. A slab-shaped pile of rubble sitting
+    // on a mound-shaped collider is the kind of mismatch a player reads as the
+    // tank climbing thin air.
+    const place = (
+      along: number,
+      across: number,
+      y: number,
+      sx: number,
+      sy: number,
+      sz: number,
+      tilt: THREE.Euler,
+    ): void => {
       const m = new THREE.Mesh(this.rubbleGeo, this.rubbleMat);
-      const t = (i / Math.max(1, chunks - 1) - 0.5) * 2 * halfLength;
-      const off = (Math.random() - 0.5) * halfWidth;
-      m.position.set(
-        x + ax * t + az * off,
-        s.baseY + RUBBLE_HEIGHT * (0.3 + Math.random() * 0.35),
-        z + az * t - ax * off,
-      );
-      m.rotation.set((Math.random() - 0.5) * 0.3, yaw + (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.3);
-      m.scale.set(
-        halfWidth * (0.9 + Math.random() * 0.7),
-        RUBBLE_HEIGHT * (0.7 + Math.random() * 0.6),
-        spread * 1.4,
-      );
+      m.position.set(x + ax * along + az * across, y, z + az * along - ax * across);
+      m.quaternion.setFromAxisAngle(UP, yaw).multiply(new THREE.Quaternion().setFromEuler(tilt));
+      m.scale.set(sx, sy, sz);
       m.castShadow = true;
       m.receiveShadow = true;
       this.deps.scene.add(m);
       this.rubble.push(m);
+    };
+
+    const chunks = Math.min(7, 3 + Math.round(halfLength / 4));
+    const spread = (halfLength * 2) / chunks;
+    for (let i = 0; i < chunks; i++) {
+      const t = (i / Math.max(1, chunks - 1) - 0.5) * 2 * halfLength;
+      place(
+        t,
+        (Math.random() - 0.5) * halfWidth,
+        s.baseY + RUBBLE_HEIGHT * (0.3 + Math.random() * 0.35),
+        halfWidth * (0.9 + Math.random() * 0.7),
+        RUBBLE_HEIGHT * (0.7 + Math.random() * 0.6),
+        spread * 1.4,
+        new THREE.Euler((Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 0.3),
+      );
+    }
+
+    // The skirt: two pieces lying along each of the four slopes, pitched to sit
+    // flat on them, so the drivable ramp is something you can see before you
+    // are on it.
+    const pitch = Math.atan2(RUBBLE_HEIGHT, RUBBLE_SLOPE_RUN);
+    const skirt = RUBBLE_SLOPE_RUN * 1.15;
+    for (const end of [-1, 1]) {
+      for (let i = 0; i < 2; i++) {
+        const across = (i - 0.5) * halfWidth;
+        place(
+          end * (halfLength + RUBBLE_SLOPE_RUN * 0.5),
+          across,
+          s.baseY + RUBBLE_HEIGHT * 0.28,
+          halfWidth * (0.7 + Math.random() * 0.4),
+          RUBBLE_HEIGHT * 0.42,
+          skirt,
+          new THREE.Euler(end * pitch, (Math.random() - 0.5) * 0.3, 0),
+        );
+        const along = (i - 0.5) * halfLength;
+        place(
+          along,
+          end * (halfWidth + RUBBLE_SLOPE_RUN * 0.5),
+          s.baseY + RUBBLE_HEIGHT * 0.28,
+          skirt,
+          RUBBLE_HEIGHT * 0.42,
+          halfLength * (0.5 + Math.random() * 0.4),
+          new THREE.Euler(0, (Math.random() - 0.5) * 0.3, -end * pitch),
+        );
+      }
     }
 
     s.state = 'down';
     this.retire(s);
     this.deps.nav.roughen(x, z, halfLength + 2, CRATER_ROUGHNESS);
-    this.resampleAround(s, halfLength + 4);
+    this.resampleAround(s, halfLength + RUBBLE_SLOPE_RUN + 4);
   }
 
   private retire(s: Structure): void {

@@ -856,7 +856,7 @@ export class Hud {
   private drawScoreboard(snap: BattleSnapshot, w: number, h: number): void {
     const ctx = this.ctx;
     const rows = snap.scoreboard.slice(0, 16);
-    const width = 560;
+    const width = 620;
     const rowH = 26;
     const height = 74 + rows.length * rowH;
     const x = (w - width) / 2;
@@ -882,7 +882,10 @@ export class Hud {
     ctx.fillText('K', x + 380, y + 52);
     ctx.fillText('D', x + 424, y + 52);
     ctx.fillText('DMG', x + 490, y + 52);
-    ctx.fillText('◆', x + 540, y + 52);
+    // Health put back into a team-mate, which is the only column a medic ever
+    // tops — and without it a squad's healer reads as the bot that did nothing.
+    ctx.fillText('HEAL', x + 552, y + 52);
+    ctx.fillText('◆', x + 600, y + 52);
 
     rows.forEach((t, i) => {
       const ry = y + 74 + i * rowH;
@@ -906,8 +909,10 @@ export class Hud {
       ctx.fillText(String(t.kills), x + 380, ry);
       ctx.fillText(String(t.deaths), x + 424, ry);
       ctx.fillText(String(Math.round(t.damageDealt)), x + 490, ry);
+      ctx.fillStyle = t.healingDone > 0 ? '#86efac' : '#4a5563';
+      ctx.fillText(t.healingDone > 0 ? String(Math.round(t.healingDone)) : '–', x + 552, ry);
       ctx.fillStyle = '#22d3ee';
-      ctx.fillText(String(t.crystals), x + 540, ry);
+      ctx.fillText(String(t.crystals), x + 600, ry);
     });
     ctx.restore();
   }

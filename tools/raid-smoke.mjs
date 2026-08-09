@@ -69,6 +69,10 @@ try {
     let dreadPeak = 0;
     let coverLost = 0;
     let structuresDown = 0;
+    // Health the squad put back into the player, sampled rather than hooked:
+    // the player's own bar going up while nothing else could have raised it.
+    let playerHealed = 0;
+    let lastPlayerHealth = player.health;
     const mark = {
       current: null, quarryAlive: true, lastBreak: 0, lastRemaining: 0,
       called: 0, onPlayer: 0, broken: 0, caught: 0, outlasted: 0, samples: 0,
@@ -104,6 +108,15 @@ try {
       }
       // Fire when the HUD would be showing a lock, which is what a player does.
       battle.update(1 / 60, { ...idle, fire: battle.lockedTarget === boss, turretTurn, forward, turn });
+
+      // A beam arrives in ten small ticks a second; a respawn arrives as the
+      // whole bar at once. Anything bigger than a fifth of the hull is the
+      // second kind and is not somebody healing you.
+      if (player.alive) {
+        const gain = player.health - lastPlayerHealth;
+        if (gain > 0 && gain < player.maxHealth * 0.2) playerHealed += gain;
+      }
+      lastPlayerHealth = player.health;
 
       if (i % 6 === 0) {
         const snap = battle.snapshot();
@@ -206,6 +219,16 @@ try {
       structuresDown,
       /** Radio calls the squad made. Silence is a bug; a wall of text is worse. */
       squadCalls: battle.squadCalls?.() ?? 0,
+      /**
+       * What the squad's Isidas actually did. A healer that ends a five-minute
+       * raid on zero is a healer that never fired, which is exactly the failure
+       * this number exists to make visible — it is invisible from the boss's
+       * health bar, the loss count and the scoreboard alike.
+       */
+      squadHealing: Math.round(
+        battle.tanks.filter((t) => !t.isBoss).reduce((a, t) => a + t.healingDone, 0),
+      ),
+      healedPlayer: Math.round(playerHealed),
       /** Best and mean rescue progress reached, 0..1 — how close help ever got. */
       markBreakBest: Number(mark.peak.toFixed(2)),
       markBreakMean: mark.ended ? Number((mark.peakSum / mark.ended).toFixed(2)) : 0,
@@ -216,6 +239,7 @@ try {
         persona: t.ai?.persona.displayName ?? 'you',
         score: Math.round(t.score),
         dmg: Math.round(t.damageDealt),
+        heal: Math.round(t.healingDone),
         deaths: t.deaths,
         alive: t.alive,
       })),
