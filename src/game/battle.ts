@@ -24,7 +24,7 @@ import { PLAYER_SUPPLY_STOCK, SELF_DESTRUCT_TIME, SUPPLY_ORDER } from '../data/s
 import { BossController } from '../ai/boss';
 import { BotController } from '../ai/bot';
 import { NavGrid } from '../ai/navgrid';
-import { PERSONAS, BOT_NAMES, raidRosterFor, rosterFor } from '../ai/personas';
+import { PERSONAS, BOT_NAMES, raidRosterFor, rosterFor, rosterWithMedic } from '../ai/personas';
 import { TeamBoard } from '../ai/teamboard';
 import { angleDelta, ballisticPitch, clamp, damp, DEG, predictIntercept, shuffled } from '../core/mathx';
 import type { InputState } from '../core/input';
@@ -227,12 +227,26 @@ export class Battle implements Arena {
 
   private spawnBots(teamed: boolean, playerTeam: TeamId): void {
     const count = this.settings.botCount;
+    const teams: TeamId[] = [];
+    for (let i = 0; i < count; i++) {
+      teams.push(teamed ? (i % 2 === 0 ? 'red' : playerTeam === 'blue' ? 'blue' : 'red') : 'free');
+    }
+    // The two sides are drawn from two rosters rather than one, so the player's
+    // side can be guaranteed its medic without handing the enemy one as well —
+    // a healer you cannot see healing is only ever experienced as a health bar
+    // that will not go down.
     const personas = shuffled(rosterFor(count));
+    const mine = teams.filter((t) => t === playerTeam);
+    if (teamed && mine.length) {
+      const friendly = shuffled(rosterWithMedic(mine.length));
+      let k = 0;
+      for (let i = 0; i < count; i++) if (teams[i] === playerTeam) personas[i] = friendly[k++];
+    }
     const names = shuffled(BOT_NAMES);
 
     for (let i = 0; i < count; i++) {
+      const team = teams[i];
       const persona = PERSONAS[personas[i]];
-      const team: TeamId = teamed ? (i % 2 === 0 ? 'red' : playerTeam === 'blue' ? 'blue' : 'red') : 'free';
       const bot = this.spawnTank({
         name: names[i % names.length],
         team,
@@ -599,14 +613,19 @@ export class Battle implements Arena {
    * Purge — obeys it. A gate the raid has pushed the Overseer through is
    * permanent, so a long fight is always progress even when it is going badly.
    */
-  heal(target: Tank, amount: number, _source: Tank | null): number {
+  heal(target: Tank, amount: number, source: Tank | null): number {
     if (!target.alive || amount <= 0) return 0;
     const before = target.health;
     const ceiling = target.isBoss
       ? target.maxHealth * phaseFor(target.healthFraction).from
       : target.maxHealth;
     target.health = Math.min(Math.max(before, ceiling), target.health + amount);
-    return target.health - before;
+    const restored = target.health - before;
+    // Banked on the same principle as damage dealt: a medic that keeps a squad
+    // standing through a raid has done the work, and the mode pays for it in
+    // the same pass that pays for damage.
+    if (restored > 0 && source && source !== target) source.healingDone += restored;
+    return restored;
   }
 
   splash(

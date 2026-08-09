@@ -132,6 +132,8 @@ export class Tank {
    * mistake it should not repeat.
    */
   selfDamageTaken = 0;
+  /** Health this tank has put back into somebody else. The medic's damage number. */
+  healingDone = 0;
   lastAttacker: Tank | null = null;
   lastAttackedAt = -999;
   lastHitProtectionAt = -999;

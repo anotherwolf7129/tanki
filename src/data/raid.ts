@@ -98,6 +98,14 @@ export const BREACH_COS = -0.35;
 export const POINTS_PER_DAMAGE = 0.012;
 
 /**
+ * What a point of healing is worth against a point of damage, on the same
+ * scoreboard. Slightly under parity: healing is easier to rack up than damage
+ * against a boss that shoots back, and a medic topping a full-health squad
+ * should not out-score the tank holding the Overseer's attention.
+ */
+export const HEAL_POINTS_SCALE = 0.8;
+
+/**
  * Reinforcements are unlimited — the squad always comes back. What a death
  * costs is *time*, and the price rises with every one the raid has taken.
  *
@@ -702,12 +710,30 @@ export const TOPPLE_CRUSH_DAMAGE = 520;
 export const TOPPLE_CRUSH_IMPULSE = 16;
 
 /**
- * How high the rubble stands. A tank climbs a 1.6 m step, so this is
- * deliberately under it: what a building leaves behind is something you drive
- * over, never something you shelter behind. Rubble that restored cover would
- * make the whole system cosmetic.
+ * How high the rubble stands. Deliberately low: what a building leaves behind
+ * is something you drive over, never something you shelter behind. Rubble that
+ * restored cover would make the whole system cosmetic.
  */
 export const RUBBLE_HEIGHT = 1.1;
+
+/**
+ * How far the debris spills out past the pile's own footprint, which is also
+ * what sets the angle a tank climbs it at.
+ *
+ * The navgrid says a 1.6 m step is climbable, and for pathing purposes it is —
+ * but the *hull* has no wheels and no suspension, and drives on synthesised
+ * traction with the contact friction zeroed. Against a vertical face of any
+ * height it simply stops. So the pile is a mound rather than a slab, and this
+ * is the run of its sides.
+ *
+ * 2.6 m out for 1.1 m up is about 23°: steep enough to read as a pile of
+ * broken building rather than a landscaped verge, well inside the 0.55 surface
+ * normal the navgrid treats as drivable, and — measured, not guessed — shallow
+ * enough that a hull crossing the crest flat out catches half a metre of air
+ * rather than a metre and a half. A tank going over rubble at speed should get
+ * light; it should not be launched.
+ */
+export const RUBBLE_SLOPE_RUN = 2.6;
 
 /**
  * Base height above which a prop stands on something rather than on the ground.

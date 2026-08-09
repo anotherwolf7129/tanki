@@ -239,6 +239,66 @@ function rampShape(w: number, h: number, d: number): CANNON.ConvexPolyhedron {
   });
 }
 
+/**
+ * A flat-topped mound: a rectangular plateau with all four sides falling away
+ * to the ground on a slope. The shape a collapsed building leaves behind.
+ *
+ * A box was the obvious collider for rubble and it was the wrong one. A tank in
+ * this game is a rigid box driven by velocity at the centre of mass, with the
+ * contact friction deliberately set to zero — it has no wheels and no
+ * suspension, so a vertical face one metre high is not a step it climbs, it is
+ * a wall it parks against, no matter how low. Rubble that was supposed to be
+ * "something you bump over" was in practice a fence around every building the
+ * Overseer knocked down.
+ *
+ * Sloping the sides fixes it with the machinery that is already there: the
+ * hull's ground probe reads the incline as a surface, `applySlopeGrip` cancels
+ * gravity along it the same way it does on a map ramp, and — because the tank
+ * really is a rigid body sitting on a real slope — driving over the shoulder of
+ * a pile rolls the hull, and clipping one corner of it lifts one side and tips
+ * the tank exactly as far as the geometry under it says.
+ *
+ * The plateau keeps the pile's authored footprint; the slope is added outside
+ * it, so debris spreads slightly wider than the slab it came from, which is
+ * what rubble does.
+ */
+export function moundShape(hx: number, hy: number, hz: number, run: number): CANNON.ConvexPolyhedron {
+  const bx = hx + run;
+  const bz = hz + run;
+  const vertices = [
+    new CANNON.Vec3(-bx, -hy, -bz), // 0 base
+    new CANNON.Vec3(bx, -hy, -bz), // 1
+    new CANNON.Vec3(bx, -hy, bz), // 2
+    new CANNON.Vec3(-bx, -hy, bz), // 3
+    new CANNON.Vec3(-hx, hy, -hz), // 4 plateau
+    new CANNON.Vec3(hx, hy, -hz), // 5
+    new CANNON.Vec3(hx, hy, hz), // 6
+    new CANNON.Vec3(-hx, hy, hz), // 7
+  ];
+  const faces = [
+    [0, 1, 2, 3], // bottom, -Y
+    [7, 6, 5, 4], // plateau, +Y
+    [4, 5, 1, 0], // -Z slope
+    [3, 2, 6, 7], // +Z slope
+    [3, 7, 4, 0], // -X slope
+    [1, 5, 6, 2], // +X slope
+  ];
+  // Supplied rather than derived, for the same reason the ramp supplies its
+  // own: cannon's derivation warns whenever the hull is not centred on its own
+  // centroid, which a mound is not.
+  const rise = 2 * hy;
+  const normals = [
+    new CANNON.Vec3(0, -1, 0),
+    new CANNON.Vec3(0, 1, 0),
+    new CANNON.Vec3(0, run, -rise),
+    new CANNON.Vec3(0, run, rise),
+    new CANNON.Vec3(-rise, run, 0),
+    new CANNON.Vec3(rise, run, 0),
+  ];
+  for (const n of normals) n.normalize();
+  return new CANNON.ConvexPolyhedron({ vertices, faces, normals });
+}
+
 export function rampMeshVertices(w: number, h: number, d: number): Float32Array {
   const s = [w / 2, h / 2, d / 2];
   const v = RAMP_VERTS.map((p) => [p[0] * s[0], p[1] * s[1], p[2] * s[2]]);

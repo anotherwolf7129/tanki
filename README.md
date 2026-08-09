@@ -476,6 +476,7 @@ src/
 tools/
   validate-maps.mjs
   raid-smoke.mjs
+  debris-smoke.mjs
   augment-smoke.mjs
   turret-dps.mjs
 ```
@@ -517,6 +518,25 @@ and so out-healed the entire squad, squadmates whose guns could not reach the ra
 a rescue threshold nobody ever reached, structural integrity so high that four hundred simulated
 seconds brought down between zero and two buildings, and a squad radio that was saying something
 every six seconds — most of it announcing deaths the kill feed had already printed.
+
+## Debris harness
+
+A raid's demolition is only a mechanic if the raid can still move through what it leaves behind.
+"Rubble is drivable" was an assertion in a comment and it was false: the pile was a box, and the tank
+is a rigid body with no wheels and zero contact friction, so a vertical face of any height at all is
+a wall to it. Every building the Overseer knocked down fenced off the ground it used to stand on.
+
+```bash
+npm run debris-smoke                  # kungur
+node tools/debris-smoke.mjs silence   # a different map
+```
+
+levels the map with the Overseer's own ordnance, scans the physics world for the rubble that is left,
+then drives a tank at each pile three ways — flat out over the crest, flat out down one shoulder, and
+at a crawl, which is the approach with no momentum to trade and the one that used to jam outright.
+It reports whether the hull got over, how high it actually rode, and how far it leaned doing it. The
+tilt number is the one worth watching: a pile that is crossed with no roll at all is behaving like a
+lift rather than like terrain.
 
 ## Augment harness
 

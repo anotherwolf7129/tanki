@@ -75,6 +75,19 @@ export class Weapon {
   private tickAccum = 0;
   private firingRecently = 0;
   private beamTarget: Tank | null = null;
+  /**
+   * Who the shooter wants the beam on, overriding the cone's own pick.
+   *
+   * The player does not set this — they point the turret and the nearest thing
+   * inside the cone is what they get, which is the whole feel of the weapon. A
+   * bot medic does, because "heal that one" is a decision it has already made
+   * on its behaviour tick, and letting the cone re-decide means a healer that
+   * drives across the map to a dying squadmate and then locks onto whichever
+   * enemy happened to drift nearer the crosshair.
+   */
+  private beamPreference: Tank | null = null;
+  /** Whether the live beam is repairing its target rather than burning it. */
+  private beamHealing = false;
   scopedActive = false;
 
   /** Set by the shooter each tick; hitscan and cone modes need the exact ray. */
@@ -105,6 +118,8 @@ export class Weapon {
     this.lockTarget = null;
     this.volleyRemaining = 0;
     this.beamTarget = null;
+    this.beamPreference = null;
+    this.beamHealing = false;
     this.scopedActive = false;
     // Tick accumulators carry over into the next life otherwise, which lets a
     // respawned sustained-fire turret land a free tick the instant it opens up.
@@ -181,6 +196,21 @@ export class Weapon {
 
   get movementLocked(): boolean {
     return this.scopedActive && !!this.def.scoped?.movementLocked;
+  }
+
+  /** True when this gun's beam is on somebody it is repairing rather than killing. */
+  get healingTarget(): Tank | null {
+    return this.beamHealing ? this.beamTarget : null;
+  }
+
+  /**
+   * Ask for the beam to be held on a particular tank. Cleared by passing null,
+   * and ignored the moment that tank leaves the cone — a preference is not a
+   * tether, so a medic whose patient drives behind a wall goes back to picking
+   * for itself rather than staring at the wall.
+   */
+  preferBeamTarget(tank: Tank | null): void {
+    this.beamPreference = tank;
   }
 
   get scopeFov(): number | null {
@@ -570,6 +600,7 @@ export class Weapon {
     const beam = this.def.beam!;
     if (!intent.fire) {
       this.beamTarget = null;
+      this.beamHealing = false;
       this.owner.mesh.setBeam(null, this.colour);
       return;
     }
@@ -579,16 +610,25 @@ export class Weapon {
     if (this.beamTarget && (!this.beamTarget.alive || !this.beamInRange(arena, this.beamTarget, beam.range, beam.lockConeDeg))) {
       this.beamTarget = null;
     }
+    // A named patient wins over the lock the cone would otherwise keep, so a
+    // medic that has decided who it is healing actually heals them.
+    const wanted = this.beamPreference;
+    if (wanted && wanted !== this.beamTarget && wanted.alive && this.beamInRange(arena, wanted, beam.range, beam.lockConeDeg)) {
+      this.beamTarget = wanted;
+    }
     if (!this.beamTarget) this.beamTarget = this.pickBeamTarget(arena, beam.range, beam.lockConeDeg, true);
     const target = this.beamTarget;
     if (!target) {
+      this.beamHealing = false;
       this.owner.mesh.setBeam(null, this.colour);
       return;
     }
 
     const healing = arena.areAllies(this.owner, target) && target !== this.owner;
+    this.beamHealing = healing;
     const drain = healing ? (this.def.fuel?.healDrainPerSec ?? 0.5) : (this.def.fuel?.drainPerSec ?? 1);
     if (this.def.fuel && !this.consumeFuel(dt, drain)) {
+      this.beamHealing = false;
       this.owner.mesh.setBeam(null, this.colour);
       return;
     }
